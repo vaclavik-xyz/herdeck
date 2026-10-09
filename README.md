@@ -1068,7 +1068,8 @@ never folds into a group: it always stands alone at the top. All three keys
 are in Settings → Window and apply live after Apply.
 
 Drop the strip within 24 px of the left or right edge of the screen's work
-area and it snaps flush to that edge (on release, never mid-drag). With
+area and it snaps flush to that edge once the drag ends (on macOS only after
+the mouse button is up, so a pause mid-drag never snaps). With
 `[desktop].dock_autohide = true` a snapped strip slides out 1.2 s after the
 pointer leaves it, leaving a 6 px sliver at the edge in the most urgent
 status's colour; rest the pointer on the sliver and it slides back in. It

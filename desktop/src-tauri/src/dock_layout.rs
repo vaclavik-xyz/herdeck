@@ -222,8 +222,8 @@ pub(crate) struct DockGeom {
     pub(crate) lift: f64,
     /// The strip's last size (w, h); (0, 0) until the dock first laid out.
     pub(crate) strip: (f64, f64),
-    /// The remembered strip origin as last laid out or settled: a settle that
-    /// finds it unchanged was our own move, not a drop.
+    /// The remembered strip origin as last settled: a settle that finds it
+    /// unchanged was our own move (a card, the sliver), not a drop.
     pub(crate) settled: Option<(i32, i32)>,
 }
 
@@ -378,7 +378,9 @@ pub(crate) fn dock_layout(
         geom.offset = plan.offset;
         geom.lift = plan.lift;
         geom.strip = (strip.w, strip.h);
-        geom.settled = Some((sx, sy));
+        // `settled` is left alone: a layout landing between a drop and its
+        // settle must not swallow the snap (the remembered origin it keeps is
+        // the dropped one, which settle has not seen yet).
     }
     let frame = plan.frame;
     let _ = window.set_size(placement_size(is_windows, frame.window.w, frame.window.h));
@@ -731,6 +733,20 @@ mod tests {
         let t = settle(&mut g, (700, 300), AREA, 24.0).expect("a user drop");
         assert_eq!(t, Settled { dx: 0.0, remembered: (700, 300) });
         assert_eq!(settle(&mut g, (700, 300), AREA, 24.0), None);
+    }
+
+    #[test]
+    fn a_layout_between_a_drop_and_its_settle_does_not_swallow_the_snap() {
+        let mut g = DockGeom { strip: (56.0, 300.0), settled: Some((700, 300)), ..DockGeom::default() };
+        // Dropped 10 px from the right edge; a card opens before the watcher
+        // fires: the window moves left, the offset follows (as dock_layout does).
+        let strip = Rect { x: 1374.0, y: 200.0, w: 56.0, h: 300.0 };
+        let p = plan_frame(strip, AREA, Some((300.0, 380.0)), 0.0, 8.0);
+        g.offset = p.offset;
+        g.lift = p.lift;
+        let window = (p.frame.window.x as i32, p.frame.window.y as i32);
+        let s = settle(&mut g, window, AREA, 24.0).expect("still a drop");
+        assert_eq!(s, Settled { dx: 10.0, remembered: (1384, 200) });
     }
 
     #[test]
