@@ -12,6 +12,7 @@
   import { commandTransport } from "./lib/deckClient";
   import { agentCallTransport } from "./lib/agentCardClient";
   import { dockTransport, fetchDockPrefs } from "./lib/dockClient";
+  import { fetchUsage } from "./lib/dockUsage";
   import { DEFAULT_DOCK_PREFS, type DockPrefs } from "./lib/dockStrip";
   import { parsePlacement, type WindowLayoutFn } from "./lib/dockModel";
   import {
@@ -153,6 +154,10 @@
   );
   // The mini dock: /agent/list via the same token-injecting `agent_call` proxy.
   const dock = $derived(discovery ? dockTransport((cmd, args) => invoke(cmd, args)) : null);
+  // The dock footer's usage rings: GET /usage through the same proxy.
+  const dockUsage = $derived(
+    discovery ? () => fetchUsage((cmd, args) => invoke(cmd, args)) : null,
+  );
   // Rust sizes the window around the strip (+ an open card) and keeps the
   // strip still on screen; it answers where the strip sits in the window.
   const dockWindowLayout: WindowLayoutFn = async (req) =>
@@ -707,6 +712,7 @@
     transport={dock}
     {agentTransport}
     windowLayout={dockWindowLayout}
+    usageSource={dockUsage}
     scale={dockScale}
     prefs={dockPrefs}
     startDrag={startWindowDrag}

@@ -129,5 +129,6 @@ export function fakeDockTransport(first: DockList | null): DockTransport & {
     },
     iconUrl: (hash) => `herdeck://localhost/project-icon/${hash}`,
     markUrl: (agent, fallback) => markUrl("herdeck://localhost", agent, fallback),
+    providerMarkUrl: (provider) => `herdeck://localhost/agent-mark/${provider}`,
   };
 }

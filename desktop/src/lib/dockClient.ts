@@ -149,6 +149,8 @@ export interface DockTransport {
   iconUrl(hash: string): string | null;
   /** The image for an agent's dock item, per the list's icon fallback. */
   markUrl(agent: DockAgent, fallback: "monogram" | "agent"): string | null;
+  /** A usage provider's logo (`claude`, `codex`): the same agent mark. */
+  providerMarkUrl(provider: string): string | null;
 }
 
 export function dockTransport(invoke: InvokeFn, schemeBase?: string): DockTransport {
@@ -169,6 +171,7 @@ export function dockTransport(invoke: InvokeFn, schemeBase?: string): DockTransp
     },
     iconUrl: (hash) => projectIconUrl(base, hash),
     markUrl: (agent, fallback) => markUrl(base, agent, fallback),
+    providerMarkUrl: (provider) => agentMarkUrl(base, provider),
   };
 }
 

@@ -9,10 +9,22 @@
   // keeps the strip where it is on screen. What the strip shows follows
   // `[desktop].dock_show` / `dock_group` (dockStrip.ts): a project's agents
   // can fold into one group item that expands inline on hover or focus.
+  // Under a divider at the bottom, one usage ring per provider with data
+  // (GET /usage, polled every minute and on show); hover/focus opens the
+  // usage card through the same placement path as an agent card.
   import { untrack, type Snippet } from "svelte";
   import DockItem from "./DockItem.svelte";
   import DockCard from "./DockCard.svelte";
   import DockGroup from "./DockGroup.svelte";
+  import DockUsageRing from "./DockUsageRing.svelte";
+  import DockUsageCard from "./DockUsageCard.svelte";
+  import {
+    USAGE_CARD_MAX_HEIGHT,
+    USAGE_CARD_WIDTH,
+    USAGE_POLL_MS,
+    usageRings,
+    type ProviderUsage,
+  } from "./dockUsage";
   import { visibilityGatedLoop } from "./pollGate";
   import {
     DOCK_POLL_MS,
@@ -47,7 +59,7 @@
   } from "./dockStrip";
   import { fmt, locale, setLang } from "./i18n.svelte";
 
-  type Target = { kind: "agent"; key: string } | { kind: "idle" };
+  type Target = { kind: "agent"; key: string } | { kind: "idle" } | { kind: "usage"; provider: string };
 
   function prefersReducedMotion(): boolean {
     try {
@@ -61,6 +73,7 @@
     transport,
     agentTransport,
     windowLayout,
+    usageSource = null,
     scale = 1,
     prefs = DEFAULT_DOCK_PREFS,
     startDrag = () => {},
@@ -74,6 +87,9 @@
     transport: DockTransport | null;
     agentTransport: AgentTransport | null;
     windowLayout: WindowLayoutFn;
+    /** GET /usage (dockUsage.fetchUsage); null = no footer. Any failure is
+     *  an empty list, which hides the footer. */
+    usageSource?: (() => Promise<ProviderUsage[]>) | null;
     /** Zoom (the context menu's Zoom items). Everything inside lays out in
      *  unzoomed CSS px; only the window size and the placement Rust returns
      *  (window px) cross the zoom, so they are scaled at that boundary. */
@@ -143,13 +159,21 @@
         : m.neutral_loading,
   );
   const openAgent = $derived(findAgent(open, list));
+
+  let usage = $state<ProviderUsage[]>([]);
+  const rings = $derived(usageRings(usage));
+  const openProvider = $derived(open?.kind === "usage" ? open.provider : null);
+  const openUsage = $derived(
+    openProvider === null ? null : (usage.find((p) => p.provider === openProvider) ?? null),
+  );
   // Rust's placement is in window px; the zoomed content lays out in px / scale.
   const stripX = $derived(placement.stripX / scale);
   const stripY = $derived(placement.stripY / scale);
+  const cardWidth = $derived(open?.kind === "usage" ? USAGE_CARD_WIDTH : CARD_WIDTH);
   const cardLeft = $derived(
     placement.side === "right"
       ? stripX + STRIP_WIDTH + CARD_GAP
-      : stripX - CARD_GAP - CARD_WIDTH,
+      : stripX - CARD_GAP - cardWidth,
   );
 
   const openKey = $derived(open?.kind === "agent" ? open.key : null);
@@ -217,6 +241,29 @@
     });
   });
 
+  // --- usage: GET /usage every minute while visible, and on show ----------
+  $effect(() => {
+    const source = usageSource;
+    if (!source) {
+      usage = [];
+      return;
+    }
+    return untrack(() => {
+      let alive = true;
+      const loop = visibilityGatedLoop(
+        async () => {
+          const next = await source();
+          if (alive) usage = next;
+        },
+        () => USAGE_POLL_MS,
+      );
+      return () => {
+        alive = false;
+        loop.stop();
+      };
+    });
+  });
+
   // Elapsed times tick only while a card shows them.
   $effect(() => {
     if (open === null) return;
@@ -233,13 +280,16 @@
 
   async function applyLayout(withCard: boolean): Promise<void> {
     const seq = ++layoutSeq;
+    const usageCard = open?.kind === "usage";
+    const width = usageCard ? USAGE_CARD_WIDTH : CARD_WIDTH;
+    const maxHeight = usageCard ? USAGE_CARD_MAX_HEIGHT : CARD_MAX_HEIGHT;
     let next: DockPlacement;
     try {
       next = await windowLayout({
         stripWidth: STRIP_WIDTH * scale,
         stripHeight: Math.max(fittedStripHeight, STRIP_WIDTH) * scale,
-        cardWidth: withCard ? CARD_WIDTH * scale : 0,
-        cardHeight: withCard ? (anchorTop + CARD_MAX_HEIGHT) * scale : 0,
+        cardWidth: withCard ? width * scale : 0,
+        cardHeight: withCard ? (anchorTop + maxHeight) * scale : 0,
       });
     } catch {
       next = { side: "right", stripX: 0, stripY: 0 }; // plain browser preview
@@ -309,7 +359,9 @@
 
   function sameTarget(a: Target | null, b: Target): boolean {
     if (a === null || a.kind !== b.kind) return false;
-    return a.kind === "idle" || (b.kind === "agent" && a.key === b.key);
+    if (a.kind === "idle") return true;
+    if (a.kind === "agent") return b.kind === "agent" && a.key === b.key;
+    return b.kind === "usage" && a.provider === b.provider;
   }
 
   async function show(target: Target, top: number, pin: boolean): Promise<void> {
@@ -492,6 +544,8 @@
       untrack(() => void hide()); // answered, and it moved on
     } else if (kind === "idle" && folded.length === 0) {
       untrack(() => void hide());
+    } else if (kind === "usage" && openUsage === null) {
+      untrack(() => void hide()); // the provider's usage went away
     }
   });
 
@@ -604,6 +658,22 @@
         >+{folded.length}</button>
       {/if}
     {/if}
+    {#if rings.length > 0}
+      <div class="usage" role="group" aria-label={m.usage_label}>
+        {#each rings as ring (ring.provider)}
+          <DockUsageRing
+            {ring}
+            markSrc={transport?.providerMarkUrl(ring.provider) ?? null}
+            active={openProvider === ring.provider}
+            onenter={(top) => enter({ kind: "usage", provider: ring.provider }, top)}
+            onleave={leave}
+            onfocus={(top) => focusItem({ kind: "usage", provider: ring.provider }, top)}
+            onblur={blurItem}
+            onclick={(top) => clickItem({ kind: "usage", provider: ring.provider }, top)}
+          />
+        {/each}
+      </div>
+    {/if}
     {#if stale}
       <span class="offline-dot" role="img" title={m.stale_title} aria-label={m.stale_title}></span>
     {/if}
@@ -615,6 +685,7 @@
       role="presentation"
       style:left="{cardLeft}px"
       style:top="{stripY + anchorTop}px"
+      style:width="{cardWidth}px"
       onmouseenter={cardEnter}
       onmouseleave={cardLeave}
     >
@@ -629,6 +700,13 @@
             onSent={markSent}
           />
         {/key}
+      {:else if openUsage}
+        <DockUsageCard
+          usage={openUsage}
+          markSrc={transport?.providerMarkUrl(openUsage.provider) ?? null}
+          {now}
+          onClose={() => void hide()}
+        />
       {:else if open.kind === "idle"}
         <DockCard
           idle={folded}
@@ -708,9 +786,24 @@
     border-radius: 50%;
     background: var(--st-offline);
   }
+  /* The usage footer: a thin divider, then one ring per provider. */
+  .usage {
+    width: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--s1);
+    margin-top: var(--s1);
+  }
+  .usage::before {
+    content: "";
+    width: 28px;
+    height: 1px;
+    margin-bottom: var(--s1);
+    background: var(--line-strong);
+  }
   .card-slot {
     position: absolute;
-    width: 300px;
     animation: dock-card-in 200ms cubic-bezier(.2, 1.3, .4, 1);
     transform-origin: left top;
   }

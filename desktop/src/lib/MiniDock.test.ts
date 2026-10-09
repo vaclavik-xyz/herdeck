@@ -4,6 +4,7 @@ import MiniDock from "./MiniDock.svelte";
 import { setLang } from "./i18n.svelte";
 import { DOCK_POLL_MS } from "./dockClient";
 import { CARD_WIDTH, STRIP_WIDTH, type DockLayoutRequest } from "./dockModel";
+import { USAGE_CARD_WIDTH, USAGE_POLL_MS, type ProviderUsage } from "./dockUsage";
 import { dockAgent, dockList, fakeAgentTransport, fakeDockTransport } from "./dockFixtures";
 import type { DockList } from "./dockClient";
 import { reactiveProps } from "./testProps.svelte";
@@ -570,6 +571,132 @@ describe("MiniDock dock_show", () => {
         "Idle A",
         "Idle B",
       ]);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("MiniDock usage footer", () => {
+  const SOON = () => new Date(Date.now() + 80 * 60 * 1000).toISOString();
+  const USAGE = (): ProviderUsage[] => [
+    {
+      provider: "claude",
+      subscription: "paid",
+      plan: "Max",
+      windows: [
+        { label: "7d", usedPercent: 20, resetsAt: null, fullEarlyS: null },
+        { label: "5h", usedPercent: 62, resetsAt: SOON(), fullEarlyS: 2400 },
+      ],
+    },
+    { provider: "codex", subscription: "paid", plan: null, windows: [{ label: "5h", usedPercent: 100, resetsAt: null, fullEarlyS: null }] },
+    { provider: "gemini", subscription: "paid", plan: null, windows: [] },
+  ];
+  const rings = (t: HTMLElement) => Array.from(t.querySelectorAll<HTMLButtonElement>("button.usage-ring"));
+
+  it("is absent without a usage source or with no data", async () => {
+    const none = render(FLEET);
+    const empty = render(FLEET, { usageSource: vi.fn(async () => []) });
+    try {
+      await vi.waitFor(() => expect(items(none.target)).toHaveLength(4));
+      await vi.waitFor(() => expect(items(empty.target)).toHaveLength(4));
+      expect(none.target.querySelector(".usage")).toBeNull();
+      expect(empty.target.querySelector(".usage")).toBeNull();
+    } finally {
+      none.cleanup();
+      empty.cleanup();
+    }
+  });
+
+  it("draws one ring per provider with data, in wire order, under the agents", async () => {
+    const { target, cleanup } = render(FLEET, { usageSource: vi.fn(async () => USAGE()) });
+    try {
+      await vi.waitFor(() => expect(rings(target)).toHaveLength(2));
+      expect(rings(target).map((b) => b.getAttribute("aria-label"))).toEqual([
+        "Claude usage: 38% left (5h), 80% left (7d)",
+        "Codex usage: 0% left (5h)",
+      ]);
+      expect(target.querySelector(".usage")?.getAttribute("aria-label")).toBe("Usage limits");
+      // The footer comes after the strip's agent items.
+      const strip = target.querySelector("nav.strip")!;
+      expect(strip.lastElementChild?.classList.contains("usage")).toBe(true);
+      // Claude: outer + inner arcs; an exhausted Codex window draws only its track.
+      const claude = rings(target)[0];
+      expect(claude.querySelectorAll("circle.arc")).toHaveLength(2);
+      expect(claude.querySelector<SVGElement>("circle.arc.outer")?.style.strokeDashoffset).toBe("-62");
+      expect(rings(target)[1].querySelectorAll("circle.arc")).toHaveLength(0);
+      expect(rings(target)[1].querySelectorAll("circle.track")).toHaveLength(1);
+      // Strip items carry no native tooltip.
+      expect(claude.hasAttribute("title")).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("opens the usage card on hover, sized like a card and scaled by the zoom", async () => {
+    const { target, layouts, cleanup } = render(FLEET, { usageSource: vi.fn(async () => USAGE()), scale: 1.25 });
+    try {
+      await vi.waitFor(() => expect(rings(target)).toHaveLength(2));
+      hover(rings(target)[0]);
+      await vi.waitFor(() => expect(target.querySelector(".card-slot .usage-card")).not.toBeNull());
+      expect(layouts.at(-1)?.cardWidth).toBeCloseTo(USAGE_CARD_WIDTH * 1.25);
+      const card = target.querySelector(".card-slot .usage-card")!;
+      expect(card.querySelector(".title")?.textContent).toBe("Claude");
+      expect(card.querySelector(".meta")?.textContent).toBe("Max");
+      const lines = Array.from(card.querySelectorAll(".win-line")).map((e) => e.textContent);
+      expect(lines[0]).toMatch(/^62% used · resets in 1 h (19|20) min$/);
+      expect(lines[1]).toBe("20% used");
+      expect(card.querySelector(".early")?.textContent).toBe("runs out ~40 min before reset");
+      expect(rings(target)[0].classList.contains("active")).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("closes the card when the provider's usage goes away", async () => {
+    let data = USAGE();
+    const source = vi.fn(async () => data);
+    const { target, cleanup } = render(FLEET, { usageSource: source });
+    try {
+      await vi.waitFor(() => expect(rings(target)).toHaveLength(2));
+      rings(target)[0].click(); // pin
+      await vi.waitFor(() => expect(target.querySelector(".usage-card")).not.toBeNull());
+      data = [];
+      document.dispatchEvent(new Event("visibilitychange")); // a show re-reads /usage
+      await vi.waitFor(() => expect(target.querySelector(".usage")).toBeNull());
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).toBeNull());
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("re-reads /usage every minute", async () => {
+    vi.useFakeTimers();
+    const source = vi.fn(async () => USAGE());
+    const { cleanup } = render(FLEET, { usageSource: source });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(source).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(USAGE_POLL_MS);
+      expect(source).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("speaks Czech in the card", async () => {
+    const { target, cleanup } = render(dockList(FLEET.agents, { language: "cs" }), {
+      usageSource: vi.fn(async () => USAGE()),
+    });
+    try {
+      await vi.waitFor(() => expect(rings(target)[0]?.getAttribute("aria-label")).toBe(
+        "Využití Claude: zbývá 38 % (5h), zbývá 80 % (7d)",
+      ));
+      hover(rings(target)[0]);
+      await vi.waitFor(() => expect(target.querySelector(".usage-card")).not.toBeNull());
+      expect(target.querySelector(".usage-card .early")?.textContent).toBe("dojde zhruba 40 min před obnovením");
+      expect(target.querySelector(".usage-card .close")?.getAttribute("title")).toBe("Zavřít (Esc)");
     } finally {
       cleanup();
     }

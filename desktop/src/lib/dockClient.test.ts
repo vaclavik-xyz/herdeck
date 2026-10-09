@@ -188,6 +188,11 @@ describe("icon fallback", () => {
     expect(t.markUrl(dockAgent({ icon: null }), "agent")).toBe("herdeck://localhost/agent-mark/claude");
     expect(t.markUrl(dockAgent({ icon: null }), "monogram")).toBeNull();
   });
+  it("a usage provider's mark is its agent mark", () => {
+    const t = dockTransport(vi.fn(), "herdeck://localhost");
+    expect(t.providerMarkUrl("claude")).toBe("herdeck://localhost/agent-mark/claude");
+    expect(t.providerMarkUrl("../x")).toBeNull();
+  });
 });
 
 describe("fetchDockPrefs", () => {
