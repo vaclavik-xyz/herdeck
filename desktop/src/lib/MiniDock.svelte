@@ -621,12 +621,14 @@
     if (!pinned) scheduleClose();
   }
 
-  /** Click = pin; a click on the card that is already pinned closes it.
+  /** Click = pin; a click on the card that is already pinned closes it —
+   *  unless its reply field holds unsent text (only × / Esc discard that).
    *  A click on the card the hover already opened only pins it (no re-open,
    *  no second window layout). */
   function clickItem(target: Target, top: number): void {
     keyboard = false; // the mouse took over: no key legend, Tab moves focus
     if (revealed && pinned && sameTarget(open, target)) {
+      if (target.kind === "agent" && cardRef?.hasDraft()) return; // keep the typed reply
       void hide();
       return;
     }

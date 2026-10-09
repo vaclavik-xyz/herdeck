@@ -794,6 +794,37 @@ describe("MiniDock card preview + reply", () => {
       cleanup();
     }
   });
+
+  it("a second click on the item keeps a card whose reply holds unsent text", async () => {
+    const tr = termTransport();
+    const { target, cleanup } = render(FLEET, { agentTransport: tr.t });
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(4));
+      const el = items(target)[3];
+      el.click(); // pin
+      const field = await vi.waitFor(() => {
+        const f = target.querySelector<HTMLTextAreaElement>(".card-slot .reply textarea");
+        expect(f).not.toBeNull();
+        return f!;
+      });
+      field.value = "half-typed answer";
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      el.click(); // would toggle-close an empty card
+      await new Promise((r) => setTimeout(r, 50));
+      expect(target.querySelector(".card-slot .reply textarea")).toBe(field);
+      expect(field.value).toBe("half-typed answer");
+
+      // Emptied again: the second click closes as usual.
+      field.value = "  ";
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      el.click();
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).toBeNull());
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // A click on an item whose card the hover already opened used to re-run the

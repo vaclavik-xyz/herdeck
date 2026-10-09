@@ -55,6 +55,11 @@
   // scrollbars on macOS (mouse attached), and under the dock's CSS zoom a
   // sub-pixel overflow alone was enough to show both of them on an empty
   // one-line field, covering the placeholder.
+  /** The field holds text that was not sent yet (a click must not drop it). */
+  export function hasDraft(): boolean {
+    return text.trim() !== "";
+  }
+
   function fit(): void {
     const el = field;
     if (!el) return;

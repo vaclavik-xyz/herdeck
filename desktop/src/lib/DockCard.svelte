@@ -56,6 +56,11 @@
     return replyField?.focus() ?? false;
   }
 
+  /** The reply field holds unsent text. */
+  export function hasDraft(): boolean {
+    return replyField?.hasDraft() ?? false;
+  }
+
   /** Keys 1–9: press the numbered option, exactly like its button (armed
    *  confirm, revision check). False when the prompt offers no such option. */
   export function answerKey(digit: string): boolean {
