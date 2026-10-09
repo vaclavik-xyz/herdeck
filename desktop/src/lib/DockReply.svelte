@@ -2,8 +2,9 @@
   // The dock card's free-text reply: Enter sends through the guarded
   // /agent/text route (herdeck-ctl `send` — typed and submitted), Shift+Enter
   // adds a line. Sending / sent (field clears) / error (text kept) are shown
-  // inline. The parent can focus the field (`focus()`) and hears when it gains
-  // or loses focus, so keyboard shortcuts never fire while typing here.
+  // inline; Esc leaves the field. The parent can focus the field (`focus()`)
+  // and hears when it gains or loses focus, so keyboard shortcuts never fire
+  // while typing here.
   import { onMount, tick } from "svelte";
   import { TEXT_MAX_CHARS, type AgentRef, type AgentTransport } from "./agentCardClient";
   import { DOCK_MESSAGES, outcomeText } from "./dockMessages";
@@ -87,6 +88,12 @@
   }
 
   function onKey(e: KeyboardEvent): void {
+    // Esc only leaves the field (the card stays; the dock's keys work again).
+    if (e.key === "Escape" && !e.isComposing) {
+      e.preventDefault();
+      field?.blur();
+      return;
+    }
     // Never submit mid IME composition; Shift+Enter is a plain newline.
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();

@@ -2,12 +2,13 @@
 //! "restart deck" hotkeys, (re)registered from the runtime's `/config` (the accelerator
 //! parsing itself lives in `hotkey`).
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::proxy::{current_discovery, run_blocking};
 use crate::sidecar::Discovery;
+use crate::sync_util::LockExt;
 use crate::window_roles::{show_role_window, toggle_deck_window, DECK_WINDOW};
-use crate::{hotkey, http, AppState, SIDECAR_TIMEOUT};
+use crate::{dock_focus, hotkey, http, AppState, SIDECAR_TIMEOUT};
 
 /// (Re)register the global shortcuts from the sidecar's `/config`: the deck
 /// toggle and the opt-in "next blocked agent" hotkey. A failure leaves the deck
@@ -124,11 +125,22 @@ pub(crate) fn register_restart_deck_accelerator(app: &tauri::AppHandle, cfg: &se
         .map_err(|e| format!("could not register the restart-deck hotkey '{accel}': {e}"))
 }
 
-/// The "next blocked agent" hotkey: show the deck and ask the runtime to open
-/// the drill of the agent that has been blocked longest (`POST /triage`, the
-/// same action as a press on the NEEDS YOU panel). The HTTP call runs off the
-/// shortcut thread; a failure is only logged — the deck is shown either way.
+/// The "next blocked agent" hotkey. In dock mode (`[desktop].floating =
+/// "dock"`) it remembers the frontmost app, shows and focuses the dock and
+/// tells it to open the longest-blocked agent's card (`dock_focus`). In deck
+/// mode it shows the deck and asks the runtime to open the drill of the agent
+/// that has been blocked longest (`POST /triage`, the same action as a press
+/// on the NEEDS YOU panel). The HTTP call runs off the shortcut thread; a
+/// failure is only logged — the deck is shown either way.
 pub(crate) fn jump_to_next_blocked(app: &tauri::AppHandle) {
+    let floating = *app.state::<AppState>().floating.lock_or_recover();
+    if dock_focus::next_blocked_route(floating) == dock_focus::NextBlockedRoute::Dock {
+        // Before the focus moves: afterwards the frontmost app is us.
+        dock_focus::remember_frontmost_app();
+        show_role_window(app, DECK_WINDOW);
+        let _ = app.emit_to(DECK_WINDOW, dock_focus::DOCK_NEXT_BLOCKED_EVENT, ());
+        return;
+    }
     show_role_window(app, DECK_WINDOW);
     let discovery = {
         let state = app.state::<AppState>();

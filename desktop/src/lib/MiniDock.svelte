@@ -12,7 +12,11 @@
   // Under a divider at the bottom, one usage ring per provider with data
   // (GET /usage, polled every minute and on show); hover/focus opens the
   // usage card through the same placement path as an agent card.
-  import { untrack, type Snippet } from "svelte";
+  // Keyboard answer flow (dockKeys.ts): the next-blocked hotkey focuses the
+  // window and calls `openNextBlocked()`; an open card then takes 1–9 / Tab /
+  // T / O / Esc, and the focus goes back to the previous app (`releaseFocus`)
+  // after an answer, Esc or Open in herdr.
+  import { tick, untrack, type Snippet } from "svelte";
   import DockItem from "./DockItem.svelte";
   import DockCard from "./DockCard.svelte";
   import DockGroup from "./DockGroup.svelte";
@@ -57,9 +61,17 @@
     type DockPrefs,
     type MemberHandlers,
   } from "./dockStrip";
+  import { blockedOrder, cycleBlocked, dockKeyAction, isTypingTarget } from "./dockKeys";
   import { fmt, locale, setLang } from "./i18n.svelte";
 
-  type Target = { kind: "agent"; key: string } | { kind: "idle" } | { kind: "usage"; provider: string };
+  type Target =
+    | { kind: "agent"; key: string }
+    | { kind: "idle" }
+    | { kind: "usage"; provider: string }
+    | { kind: "toast" }; // "Nobody is waiting" after the next-blocked hotkey
+
+  const TOAST_WIDTH = 180;
+  const TOAST_HEIGHT = 44;
 
   function prefersReducedMotion(): boolean {
     try {
@@ -82,6 +94,9 @@
     hoverOpenMs = HOVER_OPEN_MS,
     hoverCloseMs = HOVER_CLOSE_MS,
     groupCollapseMs = GROUP_COLLAPSE_MS,
+    releaseFocus = () => {},
+    toastMs = 1800,
+    herdrSettleMs = 700,
     children,
   }: {
     transport: DockTransport | null;
@@ -104,6 +119,15 @@
     reducedMotion?: boolean;
     hoverOpenMs?: number;
     hoverCloseMs?: number;
+    /** Rust `dock_release_focus`: hand the focus back to the app that was
+     *  frontmost before the next-blocked hotkey (a no-op when none is kept). */
+    releaseFocus?: () => void;
+    /** How long "Nobody is waiting" shows. */
+    toastMs?: number;
+    /** After Open in herdr, wait this long before releasing the focus, so a
+     *  local herdr activating its terminal wins (Rust then sees we are no
+     *  longer active and leaves it). */
+    herdrSettleMs?: number;
     /** Overlay content positioned against the strip (App: the status dot). */
     children?: Snippet;
   } = $props();
@@ -123,6 +147,13 @@
   let sentKey = $state<string | null>(null);
   let stripEl = $state<HTMLElement | undefined>(undefined);
   let cardEl = $state<HTMLElement | undefined>(undefined);
+  let cardRef = $state<ReturnType<typeof DockCard> | undefined>(undefined);
+  // The open card came from the next-blocked hotkey: key legend + Tab cycling.
+  let keyboard = $state(false);
+  // The hotkey arrived before the first /agent/list: run it once one lands.
+  let pendingNext = false;
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
   // Read only inside timers, never rendered: plain flags.
   let hoverCard = false;
   let hoverItem = false;
@@ -170,7 +201,9 @@
   // Rust's placement is in window px; the zoomed content lays out in px / scale.
   const stripX = $derived(placement.stripX / scale);
   const stripY = $derived(placement.stripY / scale);
-  const cardWidth = $derived(open?.kind === "usage" ? USAGE_CARD_WIDTH : CARD_WIDTH);
+  const cardWidth = $derived(
+    open?.kind === "usage" ? USAGE_CARD_WIDTH : open?.kind === "toast" ? TOAST_WIDTH : CARD_WIDTH,
+  );
   const cardLeft = $derived(
     placement.side === "right"
       ? stripX + STRIP_WIDTH + CARD_GAP
@@ -281,9 +314,10 @@
 
   async function applyLayout(withCard: boolean): Promise<void> {
     const seq = ++layoutSeq;
-    const usageCard = open?.kind === "usage";
-    const width = usageCard ? USAGE_CARD_WIDTH : CARD_WIDTH;
-    const maxHeight = usageCard ? USAGE_CARD_MAX_HEIGHT : CARD_MAX_HEIGHT;
+    const kind = open?.kind;
+    const width = kind === "usage" ? USAGE_CARD_WIDTH : kind === "toast" ? TOAST_WIDTH : CARD_WIDTH;
+    const maxHeight =
+      kind === "usage" ? USAGE_CARD_MAX_HEIGHT : kind === "toast" ? TOAST_HEIGHT : CARD_MAX_HEIGHT;
     let next: DockPlacement;
     try {
       next = await windowLayout({
@@ -360,7 +394,7 @@
 
   function sameTarget(a: Target | null, b: Target): boolean {
     if (a === null || a.kind !== b.kind) return false;
-    if (a.kind === "idle") return true;
+    if (a.kind === "idle" || a.kind === "toast") return true;
     if (a.kind === "agent") return b.kind === "agent" && a.key === b.key;
     return b.kind === "usage" && a.provider === b.provider;
   }
@@ -381,9 +415,11 @@
     hoverCard = false;
     hoverItem = false;
     hoverKey = null;
+    clearTimeout(toastTimer);
     if (open === null) return;
     open = null;
     pinned = false;
+    keyboard = false;
     revealed = false;
     sentKey = null;
     scheduleGroupCollapse(); // a member's card no longer holds its group open
@@ -490,6 +526,7 @@
   }
 
   function clickItem(target: Target, top: number): void {
+    keyboard = false; // the mouse took over: no key legend, Tab moves focus
     void show(target, top, true);
   }
 
@@ -509,21 +546,126 @@
     if (focused && open?.kind === "agent") pinned = true;
   }
 
+  // An answer (option or text reply to a blocked agent) was handed over.
   function markSent(): void {
     if (openAgent) sentKey = agentKey(openAgent);
+    releaseFocus();
   }
 
+  /** Close the card by the user's hand (Esc, ×, Open in herdr) and give the
+   *  focus back. After Open in herdr a local herdr activates its terminal
+   *  itself: release only after it had the chance, so Rust can tell. */
+  function closeCard(reason?: "opened"): void {
+    void hide();
+    clearTimeout(settleTimer);
+    if (reason === "opened") settleTimer = setTimeout(releaseFocus, herdrSettleMs);
+    else releaseFocus();
+  }
+
+  /** The DOM top of an agent's strip item (its click/focus anchor). */
+  function itemTop(a: DockAgent): number {
+    const id = `${a.serverId}/${a.paneId}`;
+    for (const el of stripEl?.querySelectorAll<HTMLElement>("button.item:not(.group)") ?? []) {
+      if (el.dataset.agent === id) return el.offsetTop;
+    }
+    return 0;
+  }
+
+  /** Open an agent's card from the keyboard, unfolding its group first. */
+  async function openByKeyboard(a: DockAgent): Promise<void> {
+    const key = agentKey(a);
+    const home = strip.items.find(
+      (it) => it.kind === "group" && it.members.some((m) => agentKey(m) === key),
+    );
+    if (home && expandedGroup !== home.key) {
+      expandGroup(home.key);
+      await tick();
+    }
+    hoverKey = null;
+    hoverItem = false;
+    keyboard = true;
+    await show({ kind: "agent", key }, itemTop(a), true);
+  }
+
+  /** The next-blocked hotkey (Rust focused the window and emitted
+   *  `dock-next-blocked`): open the longest-blocked agent's card — again from
+   *  a blocked card = the next one — or say briefly that nobody is waiting. */
+  export function openNextBlocked(): void {
+    if (list === null) {
+      pendingNext = true;
+      return;
+    }
+    pendingNext = false;
+    const agents = list.agents;
+    const current = keyboard && openAgent?.status === "blocked" ? agentKey(openAgent) : null;
+    const target = current === null ? (blockedOrder(agents)[0] ?? null) : cycleBlocked(agents, current, 1);
+    if (target !== null) {
+      void openByKeyboard(target);
+      return;
+    }
+    if (current !== null) {
+      keyboard = true; // the only blocked agent: stay on its card
+      return;
+    }
+    void show({ kind: "toast" }, 0, false);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      if (open?.kind !== "toast") return;
+      void hide();
+      releaseFocus();
+    }, toastMs);
+  }
+
+  $effect(() => {
+    if (list !== null && pendingNext) untrack(() => openNextBlocked());
+  });
+
   function onKey(event: KeyboardEvent): void {
-    if (event.key !== "Escape") return;
-    if (open === null) {
+    if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) {
+      // Every key belongs to the reply field; Esc only leaves it (DockReply
+      // blurs it too — this covers any other field).
+      if (event.key === "Escape") {
+        event.preventDefault();
+        (document.activeElement as HTMLElement | null)?.blur?.();
+      }
+      return;
+    }
+    if (event.defaultPrevented) return;
+    if (event.key === "Escape" && open === null) {
       if (expandedGroup === null) return;
       event.preventDefault();
       collapseGroup(); // Esc folds an expanded group when no card is open
       return;
     }
-    event.preventDefault();
-    (document.activeElement as HTMLElement | null)?.blur?.();
-    void hide();
+    const action = dockKeyAction(event, {
+      card: open === null ? null : open.kind === "agent" && openAgent !== null ? "agent" : "other",
+      typing: false,
+      keyboard,
+    });
+    if (action === null) return;
+    switch (action.kind) {
+      case "close":
+        event.preventDefault();
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        closeCard();
+        return;
+      case "cycle": {
+        event.preventDefault();
+        const next = cycleBlocked(list?.agents ?? [], openKey, action.dir);
+        if (next !== null) void openByKeyboard(next);
+        return;
+      }
+      case "answer":
+        if (cardRef?.answerKey(action.key)) event.preventDefault();
+        return;
+      case "reply":
+        // preventDefault keeps the T / slash out of the field it focuses.
+        if (cardRef?.focusReply()) event.preventDefault();
+        return;
+      case "open":
+        if (cardRef?.openInHerdr()) event.preventDefault();
+        return;
+    }
   }
 
   function onBackdrop(event: MouseEvent): void {
@@ -594,6 +736,8 @@
     clearTimers();
     clearGroupTimers();
     clearTimeout(shrinkTimer);
+    clearTimeout(toastTimer);
+    clearTimeout(settleTimer);
   });
 </script>
 
@@ -699,13 +843,15 @@
       {#if openAgent}
         {#key agentKey(openAgent)}
           <DockCard
+            bind:this={cardRef}
             agent={openAgent}
             sinceOf={(a) => liveSince(a.sinceS, receivedAt, now)}
             iconUrl={iconFor}
             transport={agentTransport}
-            onClose={() => void hide()}
+            onClose={closeCard}
             onSent={markSent}
             onReplyFocus={replyFocus}
+            keyboardHints={keyboard}
           />
         {/key}
       {:else if openUsage}
@@ -722,8 +868,10 @@
           sinceOf={(a) => liveSince(a.sinceS, receivedAt, now)}
           iconUrl={iconFor}
           transport={agentTransport}
-          onClose={() => void hide()}
+          onClose={closeCard}
         />
+      {:else if open.kind === "toast"}
+        <p class="toast" role="status">{m.nobody_waiting}</p>
       {/if}
     </div>
   {/if}
@@ -809,6 +957,18 @@
     height: 1px;
     margin-bottom: var(--s1);
     background: var(--line-strong);
+  }
+  .toast {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0;
+    padding: var(--s2) var(--s3);
+    background: var(--panel-raised);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-panel);
+    color: var(--text-dim);
+    font: var(--t-label);
+    white-space: nowrap;
   }
   .card-slot {
     position: absolute;

@@ -128,7 +128,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       dock_group: "Folds 2+ agents of one project (repo, else workspace) into one dock item that expands on hover; blocked never fold; default on.",
       dock_autohide: "Slides the dock off a screen edge it is snapped to, leaving a thin sliver; stays out while an agent is blocked; default off.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
-      next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
+      next_blocked: "Global shortcut (e.g. Alt+Cmd+H) to the longest-blocked agent: dock card with keys 1–9/Tab/T/Esc, or deck drill; empty = off.",
       restart_deck: "Global shortcut that closes and reopens the D200 and redraws it (like the tray's Restart deck); empty = off (default).",
     },
     telegram_bridge: {
@@ -270,7 +270,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       dock_group: "Sloučí 2+ agenty jednoho projektu (repo, jinak workspace) do jedné položky, která se rozbalí najetím; blokovaní nikdy; výchozí zapnuto.",
       dock_autohide: "Schová dock přichycený k okraji obrazovky, zůstane jen tenký proužek; vysune se, když je agent blokovaný; výchozí vypnuto.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
-      next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
+      next_blocked: "Zkratka (např. Alt+Cmd+H) na nejdéle blokovaného agenta: karta docku s klávesami 1–9/Tab/T/Esc, či drill decku; prázdné = vyp.",
       restart_deck: "Globální zkratka, která zavře a znovu otevře D200 a překreslí ho (jako Restartovat deck v tray); prázdné = vypnuto (výchozí).",
     },
     telegram_bridge: {

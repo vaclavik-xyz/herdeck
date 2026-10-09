@@ -51,6 +51,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   collapsible and remembered per viewer) and a reply field for agents that
   take free text (Enter sends via `/agent/text`, Shift+Enter is a newline,
   sending / sent / error shown inline, the text kept on error).
+- Mini dock keyboard answer flow: with `[desktop].floating = "dock"` the
+  `[hotkeys].next_blocked` shortcut (e.g. `Alt+Cmd+H`) remembers the
+  frontmost app, focuses the dock and opens the longest-blocked agent's card
+  (again = the next one; "Nobody is waiting" when none is). In the card `1`–`9`
+  answers, `Tab` / `Shift+Tab` moves between blocked agents, `T` or `/` focuses
+  the reply, `O` opens in herdr and `Esc` closes; keys are ignored while
+  typing a reply (Esc there only leaves the field). After an answer, Esc or
+  Open in herdr the focus goes back to the previous app (new command
+  `dock_release_focus`; macOS only). Deck mode keeps `POST /triage`.
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)

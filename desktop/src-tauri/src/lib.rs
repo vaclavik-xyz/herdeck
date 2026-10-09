@@ -25,6 +25,7 @@ mod banner_native;
 pub mod banners;
 pub mod build_channel;
 pub mod deck_prefs;
+mod dock_focus;
 mod dock_layout;
 pub mod hotkey;
 pub mod http;
@@ -344,6 +345,7 @@ pub fn run() {
             window_roles::reload_deck_always_on_top,
             dock_layout::dock_layout,
             dock_layout::reload_floating,
+            dock_focus::dock_release_focus,
             window_roles::show_deck,
             window_roles::hide_deck,
             window_roles::show_app,
@@ -468,6 +470,10 @@ pub fn run() {
                     // A position reported while the deck is hidden is not a user
                     // drag — some window managers emit one on hide — and must
                     // not overwrite the place the user actually left it.
+                    // The dock lost focus on its own (another app or window was
+                    // clicked): its keyboard session is over, so a later
+                    // `dock_release_focus` must not pull that app back out.
+                    tauri::WindowEvent::Focused(false) => dock_focus::forget_return_app(),
                     tauri::WindowEvent::Moved(position) => {
                         if deck.is_visible().unwrap_or(false) {
                             // While a dock card is open the window's origin is

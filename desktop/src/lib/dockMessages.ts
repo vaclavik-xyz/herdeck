@@ -66,6 +66,8 @@ export const DOCK_MESSAGES = defineMessages({
     reply_sending: "Sending…",
     reply_sent: "Sent ✓",
     reply_too_long: "Too long: at most {n} characters.",
+    key_legend: "1–9 answer · Tab next · T reply · Esc",
+    nobody_waiting: "Nobody is waiting",
   },
   cs: {
     strip_label: "Agenti",
@@ -129,6 +131,8 @@ export const DOCK_MESSAGES = defineMessages({
     reply_sending: "Odesílám…",
     reply_sent: "Odesláno ✓",
     reply_too_long: "Příliš dlouhé: nejvýš {n} znaků.",
+    key_legend: "1–9 odpověď · Tab další · T odpovědět · Esc",
+    nobody_waiting: "Nikdo nečeká",
   },
 });
 

@@ -1152,7 +1152,11 @@ blocked agent, and back to the overview when none is left. **Back** leaves the
 loop at any time. While the spotlight is up the status window starts triage
 instead of paging. In the desktop app, `[hotkeys].next_blocked` (for example
 `"CmdOrCtrl+Shift+B"`, off by default) is a global shortcut that shows the deck
-and does the same; pressing it again skips to the next blocked agent. State is encoded by color: working = green,
+and does the same; pressing it again skips to the next blocked agent. With the
+mini dock as the floating window it instead focuses the dock and opens the
+blocked agent's card: `1`–`9` answers, `Tab` moves to the next blocked agent,
+`T` replies, `O` opens it in herdr and `Esc` closes — and the focus returns to
+the app you were in. State is encoded by color: working = green,
 idle = blue, blocked = amber, done = cyan, waiting = violet, error/disconnected
 = red. **Waiting** is derived from a pane held by
 [herdwatch](https://github.com/vaclavik-xyz/herdwatch) (or any source using

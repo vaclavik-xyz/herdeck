@@ -181,6 +181,20 @@
       void unlisten.then((stop) => stop());
     };
   });
+  // The next-blocked hotkey in dock mode: Rust remembered the frontmost app,
+  // focused this window and asks the dock to open the longest-blocked card.
+  let miniDock = $state<ReturnType<typeof MiniDock> | undefined>(undefined);
+  $effect(() => {
+    if (!dockMode) return;
+    const unlisten = listen("dock-next-blocked", () => {
+      window.focus(); // the WebView, not just the native window, takes the keys
+      miniDock?.openNextBlocked();
+    });
+    return () => void unlisten.then((stop) => stop());
+  });
+  function releaseDockFocus(): void {
+    void invoke("dock_release_focus").catch(() => {});
+  }
   function openSettingsWindow(): void {
     void invoke("show_app").catch(() => {});
   }
@@ -709,6 +723,7 @@
   </div>
 {:else if dockMode}
   <MiniDock
+    bind:this={miniDock}
     transport={dock}
     {agentTransport}
     windowLayout={dockWindowLayout}
@@ -717,6 +732,7 @@
     prefs={dockPrefs}
     startDrag={startWindowDrag}
     onOpenSettings={openSettingsWindow}
+    releaseFocus={releaseDockFocus}
   >
     <DeckStatusDot {fetchHealth} invoke={maintenanceInvoke} appUpdate={shownUpdate} />
   </MiniDock>

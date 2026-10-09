@@ -31,6 +31,7 @@
     onClose,
     onSent = () => {},
     onReplyFocus = () => {},
+    keyboardHints = false,
   }: {
     agent?: DockAgent | null;
     idle?: DockAgent[];
@@ -39,10 +40,13 @@
     sinceOf: (a: DockAgent) => number;
     iconUrl: (a: DockAgent) => string | null;
     transport: AgentTransport | null;
-    onClose: () => void;
+    /** "opened" = Open in herdr succeeded (herdr now owns the focus). */
+    onClose: (reason?: "opened") => void;
     onSent?: () => void;
     /** The reply field gained (true) or lost (false) keyboard focus. */
     onReplyFocus?: (focused: boolean) => void;
+    /** Opened by the next-blocked hotkey: show the key legend. */
+    keyboardHints?: boolean;
   } = $props();
 
   let replyField = $state<ReturnType<typeof DockReply> | undefined>(undefined);
@@ -50,6 +54,23 @@
   /** Put the caret in the reply field; false when this card has none. */
   export function focusReply(): boolean {
     return replyField?.focus() ?? false;
+  }
+
+  /** Keys 1–9: press the numbered option, exactly like its button (armed
+   *  confirm, revision check). False when the prompt offers no such option. */
+  export function answerKey(digit: string): boolean {
+    const o = detail?.options.find((x) => x.kind === "option" && x.key === digit);
+    if (!o || !blocked || sent || busy) return false;
+    void answer(o);
+    return true;
+  }
+
+  /** Key O: the "Open in herdr" button. False when it is not offered. */
+  export function openInHerdr(): boolean {
+    const a = agent;
+    if (!a || !detail?.canFocus) return false;
+    void focusAgent(a);
+    return true;
   }
 
   const m = $derived(DOCK_MESSAGES[locale.lang]);
@@ -161,7 +182,7 @@
     const out = await t.act("focus", { serverId: target.serverId, paneId: target.paneId });
     if (!alive) return;
     if (out.ok) {
-      onClose();
+      onClose("opened");
       return;
     }
     if (agent) note = outcomeText(locale.lang, out);
@@ -198,7 +219,7 @@
         <h2 class="title">{agent.title}</h2>
         {#if meta}<p class="meta">{meta}</p>{/if}
       </div>
-      <button type="button" class="close" title={m.close_title} aria-label={m.close_title} onclick={onClose}>×</button>
+      <button type="button" class="close" title={m.close_title} aria-label={m.close_title} onclick={() => onClose()}>×</button>
     </header>
     <p class="status st-{agent.status}">
       <span class="pill">{statusLabel(locale.lang, agent.status, agent.offline)}</span>
@@ -248,6 +269,7 @@
     {#if detail?.canFocus}
       <button type="button" class="focus" onclick={() => agent && void focusAgent(agent)}>{m.open_herdr}</button>
     {/if}
+    {#if keyboardHints}<p class="keys">{m.key_legend}</p>{/if}
   {:else}
     <h2 class="title">{heading ?? fmt(m.idle_heading, { n: idle.length })}</h2>
     <ul class="idle">
@@ -380,6 +402,13 @@
     color: var(--accent-strong);
     font: var(--t-label);
     cursor: pointer;
+  }
+  .keys {
+    margin: 0;
+    padding-top: var(--s1);
+    border-top: 1px solid var(--line);
+    color: var(--text-faint);
+    font: var(--t-help);
   }
   .idle { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
   .row {

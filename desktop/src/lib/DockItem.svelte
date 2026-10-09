@@ -48,6 +48,7 @@
   class:group={count > 0}
   aria-label={label}
   aria-expanded={expanded}
+  data-agent="{agent.serverId}/{agent.paneId}"
   onmouseenter={(e) => onenter(top(e))}
   onmouseleave={onleave}
   onfocus={(e) => onfocus(top(e))}
