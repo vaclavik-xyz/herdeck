@@ -27,8 +27,10 @@
 
   /** How long "Sent ✓" stays before the hint line empties again. */
   const SENT_SHOW_MS = 2500;
-  /** Tallest the field grows before it scrolls (≈ 4 lines). */
-  const MAX_FIELD_PX = 76;
+  /** One line (18 px) + 2 × 5 px padding; matches the CSS min-height. */
+  const MIN_FIELD_PX = 28;
+  /** Tallest the field grows before it scrolls (4 lines). */
+  const MAX_FIELD_PX = 82;
 
   const m = $derived(DOCK_MESSAGES[locale.lang]);
 
@@ -48,11 +50,18 @@
     return true;
   }
 
+  // Grow with the text up to MAX_FIELD_PX. The field only becomes scrollable
+  // once the text is taller than that: a scrollable textarea gets classic
+  // scrollbars on macOS (mouse attached), and under the dock's CSS zoom a
+  // sub-pixel overflow alone was enough to show both of them on an empty
+  // one-line field, covering the placeholder.
   function fit(): void {
     const el = field;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
+    const full = el.scrollHeight;
+    el.style.height = `${Math.max(MIN_FIELD_PX, Math.min(full, MAX_FIELD_PX))}px`;
+    el.style.overflowY = full > MAX_FIELD_PX + 1 ? "auto" : "hidden";
   }
 
   async function send(): Promise<void> {
@@ -109,9 +118,12 @@
     fit();
   }
 
-  onMount(() => () => {
-    alive = false;
-    clearTimeout(sentTimer);
+  onMount(() => {
+    fit();
+    return () => {
+      alive = false;
+      clearTimeout(sentTimer);
+    };
   });
 </script>
 
@@ -121,6 +133,7 @@
       bind:this={field}
       bind:value={text}
       rows="1"
+      wrap="soft"
       maxlength={TEXT_MAX_CHARS}
       placeholder={m.reply_placeholder}
       aria-label={m.reply_label}
@@ -161,6 +174,7 @@
   .field {
     position: relative;
     display: flex;
+    /* A grown field keeps the send button on its last line. */
     align-items: flex-end;
     border: 1px solid var(--line);
     border-radius: var(--r-control);
@@ -174,20 +188,35 @@
     flex: 1;
     min-width: 0;
     box-sizing: border-box;
-    min-height: 26px;
-    max-height: 76px;
+    display: block;
+    /* MIN_FIELD_PX / MAX_FIELD_PX: one line of 18 px + 2 × 5 px, up to 4 lines. */
+    height: 28px;
+    min-height: 28px;
+    max-height: 82px;
     margin: 0;
-    padding: 5px 0 5px var(--s2);
+    padding: 5px var(--s1) 5px var(--s2);
     border: 0;
     outline: none;
     resize: none;
     background: transparent;
     color: var(--text);
     font: var(--t-body);
-    line-height: 16px;
-    overflow-y: auto;
+    line-height: 18px;
+    /* Wrap, never scroll sideways; fit() turns vertical scrolling on only
+       past four lines, and even then no scrollbar is drawn. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow: hidden;
+    scrollbar-width: none;
   }
-  textarea::placeholder { color: var(--text-faint); }
+  textarea::-webkit-scrollbar { display: none; }
+  textarea::placeholder {
+    color: var(--text-faint);
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   textarea:disabled { opacity: .5; }
   .busy textarea { color: var(--text-dim); }
   .send {
@@ -196,7 +225,7 @@
     place-items: center;
     width: 20px;
     height: 20px;
-    margin: 3px;
+    margin: 4px; /* 20 + 2 × 4 = the one-line field's 28 px: centred on it */
     padding: 0;
     border: 0;
     border-radius: 5px;
