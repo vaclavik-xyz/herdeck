@@ -201,6 +201,31 @@ describe("MiniDock card keys", () => {
     }
   });
 
+  it("a hotkey card that closes on its own (the agent left) still hands the focus back", async () => {
+    const r = await openedByHotkey();
+    try {
+      r.dock.push(dockList([FLEET.agents[0], FLEET.agents[1]], { version: 2 }));
+      await vi.waitFor(() => expect(r.target.querySelector(".card")).toBeNull());
+      expect(r.releaseFocus).toHaveBeenCalledTimes(1);
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  it("a card used only with the mouse never asks for the focus back", async () => {
+    const r = render(FLEET);
+    try {
+      await vi.waitFor(() => expect(items(r.target).length).toBe(3));
+      items(r.target)[0].click();
+      await vi.waitFor(() => expect(r.target.querySelector(".card")).not.toBeNull());
+      press("Escape");
+      await vi.waitFor(() => expect(r.target.querySelector(".card")).toBeNull());
+      expect(r.releaseFocus).not.toHaveBeenCalled();
+    } finally {
+      r.cleanup();
+    }
+  });
+
   it("O opens in herdr and releases the focus only after herdr had its turn", async () => {
     const r = await openedByHotkey(FLEET, { herdrSettleMs: 300 });
     try {

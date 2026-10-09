@@ -152,6 +152,10 @@
   let keyboard = $state(false);
   // The hotkey arrived before the first /agent/list: run it once one lands.
   let pendingNext = false;
+  // The next-blocked hotkey moved the focus here and it has not been handed
+  // back yet: whatever closes the card next (Esc, an answer, the agent
+  // leaving, a blur) ends the session and releases the focus exactly once.
+  let session = false;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
   // Read only inside timers, never rendered: plain flags.
@@ -412,6 +416,7 @@
 
   async function hide(): Promise<void> {
     clearTimers();
+    endSession();
     hoverCard = false;
     hoverItem = false;
     hoverKey = null;
@@ -546,20 +551,29 @@
     if (focused && open?.kind === "agent") pinned = true;
   }
 
+  /** Hand the focus back to the app the hotkey took it from (Rust skips it
+   *  when the user already moved elsewhere). Only once per hotkey session;
+   *  a mouse-only dock never calls it. */
+  function endSession(delayMs = 0): void {
+    if (!session) return;
+    session = false;
+    clearTimeout(settleTimer);
+    if (delayMs > 0) settleTimer = setTimeout(releaseFocus, delayMs);
+    else releaseFocus();
+  }
+
   // An answer (option or text reply to a blocked agent) was handed over.
   function markSent(): void {
     if (openAgent) sentKey = agentKey(openAgent);
-    releaseFocus();
+    endSession();
   }
 
-  /** Close the card by the user's hand (Esc, ×, Open in herdr) and give the
-   *  focus back. After Open in herdr a local herdr activates its terminal
-   *  itself: release only after it had the chance, so Rust can tell. */
+  /** Close the card by the user's hand (Esc, ×, Open in herdr). After Open in
+   *  herdr a local herdr activates its terminal itself: release only after it
+   *  had the chance, so Rust can tell (any other close releases in hide()). */
   function closeCard(reason?: "opened"): void {
+    if (reason === "opened") endSession(herdrSettleMs);
     void hide();
-    clearTimeout(settleTimer);
-    if (reason === "opened") settleTimer = setTimeout(releaseFocus, herdrSettleMs);
-    else releaseFocus();
   }
 
   /** The DOM top of an agent's strip item (its click/focus anchor). */
@@ -591,6 +605,7 @@
    *  `dock-next-blocked`): open the longest-blocked agent's card — again from
    *  a blocked card = the next one — or say briefly that nobody is waiting. */
   export function openNextBlocked(): void {
+    session = true;
     if (list === null) {
       pendingNext = true;
       return;
@@ -610,9 +625,7 @@
     void show({ kind: "toast" }, 0, false);
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
-      if (open?.kind !== "toast") return;
-      void hide();
-      releaseFocus();
+      if (open?.kind === "toast") void hide(); // hide() releases the focus
     }, toastMs);
   }
 
@@ -859,7 +872,7 @@
           usage={openUsage}
           markSrc={transport?.providerMarkUrl(openUsage.provider) ?? null}
           {now}
-          onClose={() => void hide()}
+          onClose={() => closeCard()}
         />
       {:else if open.kind === "idle"}
         <DockCard
