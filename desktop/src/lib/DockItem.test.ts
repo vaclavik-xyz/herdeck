@@ -57,6 +57,18 @@ describe("DockItem", () => {
     }
   });
 
+  it("draws the working arc as a travelling SVG dash, not a spun border", () => {
+    const working = render(dockAgent({ status: "working" }));
+    const idle = render(dockAgent({ status: "idle" }));
+    try {
+      expect(working.target.querySelector("svg.arc circle")?.getAttribute("pathLength")).toBe("100");
+      expect(idle.target.querySelector("svg.arc")).toBeNull();
+    } finally {
+      working.cleanup();
+      idle.cleanup();
+    }
+  });
+
   it("puts a dot on a done agent", () => {
     const { target, cleanup } = render(dockAgent({ status: "done" }));
     try {

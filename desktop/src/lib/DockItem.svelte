@@ -44,6 +44,11 @@
   onclick={(e) => onclick(top(e))}
 >
   <span class="ring" aria-hidden="true"></span>
+  {#if agent.status === "working"}
+    <svg class="arc" viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="24" r="22.5" pathLength="100" />
+    </svg>
+  {/if}
   <span class="face"><DockMark {agent} src={iconSrc} size={30} /></span>
   {#if agent.status === "done"}<span class="done-dot" aria-hidden="true"></span>{/if}
   {#if agent.offline}<span class="slash" aria-hidden="true"></span>{/if}
@@ -73,9 +78,25 @@
     pointer-events: none;
   }
   .face { position: relative; display: grid; place-items: center; }
-  .st-working .ring {
-    border-color: var(--st-working);
-    border-right-color: transparent;
+  /* The working arc is an SVG stroke whose dash travels round a fixed circle.
+     Spinning a CSS border with one transparent side looked wobbly: the arc's
+     ends are mitred wedges and the rotated layer resamples off the pixel grid
+     (worse under zoom), so its thickness seemed to breathe as it turned. */
+  .st-working .ring { border-color: color-mix(in srgb, var(--st-working) 18%, transparent); }
+  .arc {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+  .arc circle {
+    fill: none;
+    stroke: var(--st-working);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 70 30;
     animation: dock-spin 1.6s linear infinite;
   }
   .st-waiting .ring { border-style: dashed; border-color: var(--st-waiting); }
@@ -96,7 +117,7 @@
     background: var(--st-done);
     box-shadow: 0 0 0 2px var(--panel);
   }
-  .offline .face, .offline .ring { filter: grayscale(1) opacity(.55); }
+  .offline .face, .offline .ring, .offline .arc { filter: grayscale(1) opacity(.55); }
   .slash {
     position: absolute;
     width: 2px;
@@ -107,13 +128,14 @@
   }
   .active .ring, .item:focus-visible .ring { box-shadow: 0 0 0 2px var(--accent-ring); }
   .item:focus-visible { outline: none; }
-  @keyframes dock-spin { to { transform: rotate(360deg); } }
+  @keyframes dock-spin { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
   @keyframes dock-pulse {
     0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st-blocked) 45%, transparent); }
     50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--st-blocked) 0%, transparent); }
   }
-  :global(.mini-dock.reduced) .ring { animation: none; }
+  :global(.mini-dock.reduced) .ring,
+  :global(.mini-dock.reduced) .arc circle { animation: none; }
   @media (prefers-reduced-motion: reduce) {
-    .ring { animation: none; }
+    .ring, .arc circle { animation: none; }
   }
 </style>
