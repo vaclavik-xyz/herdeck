@@ -670,6 +670,43 @@ describe("MiniDock usage footer", () => {
     }
   });
 
+  it("keeps the footer and an open card through a failed poll", async () => {
+    let fail = false;
+    const source = vi.fn(async () => (fail ? null : USAGE()));
+    const { target, cleanup } = render(FLEET, { usageSource: source });
+    try {
+      await vi.waitFor(() => expect(rings(target)).toHaveLength(2));
+      rings(target)[0].click(); // pin
+      await vi.waitFor(() => expect(target.querySelector(".usage-card")).not.toBeNull());
+      fail = true;
+      const calls = source.mock.calls.length;
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.waitFor(() => expect(source.mock.calls.length).toBeGreaterThan(calls));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(rings(target)).toHaveLength(2);
+      expect(target.querySelector(".usage-card")).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("closes the card when its provider's ring goes away (no windows left)", async () => {
+    let data = USAGE();
+    const source = vi.fn(async () => data);
+    const { target, cleanup } = render(FLEET, { usageSource: source });
+    try {
+      await vi.waitFor(() => expect(rings(target)).toHaveLength(2));
+      rings(target)[0].click(); // pin Claude
+      await vi.waitFor(() => expect(target.querySelector(".usage-card")).not.toBeNull());
+      data = USAGE().map((p) => (p.provider === "claude" ? { ...p, windows: [] } : p));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.waitFor(() => expect(rings(target)).toHaveLength(1));
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).toBeNull());
+    } finally {
+      cleanup();
+    }
+  });
+
   it("re-reads /usage every minute", async () => {
     vi.useFakeTimers();
     const source = vi.fn(async () => USAGE());

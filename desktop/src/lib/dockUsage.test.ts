@@ -41,9 +41,13 @@ describe("fetchUsage", () => {
     expect(invoke).toHaveBeenCalledWith("agent_call", { method: "GET", path: "/usage" });
   });
 
-  it("is empty on a non-200 status or a failed call", async () => {
-    expect(await fetchUsage(vi.fn().mockResolvedValue({ status: 403, body: BODY }))).toEqual([]);
-    expect(await fetchUsage(vi.fn().mockRejectedValue(new Error("down")))).toEqual([]);
+  it("is null (unknown, keep the last data) on a non-200 status or a failed call", async () => {
+    expect(await fetchUsage(vi.fn().mockResolvedValue({ status: 403, body: BODY }))).toBeNull();
+    expect(await fetchUsage(vi.fn().mockRejectedValue(new Error("down")))).toBeNull();
+  });
+
+  it("is an empty list for a successful answer without providers", async () => {
+    expect(await fetchUsage(vi.fn().mockResolvedValue({ status: 200, body: { providers: [] } }))).toEqual([]);
   });
 });
 

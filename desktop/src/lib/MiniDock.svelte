@@ -87,9 +87,10 @@
     transport: DockTransport | null;
     agentTransport: AgentTransport | null;
     windowLayout: WindowLayoutFn;
-    /** GET /usage (dockUsage.fetchUsage); null = no footer. Any failure is
-     *  an empty list, which hides the footer. */
-    usageSource?: (() => Promise<ProviderUsage[]>) | null;
+    /** GET /usage (dockUsage.fetchUsage); null = no footer. A poll that
+     *  answers null (failed) keeps the last data; only a successful answer
+     *  without providers clears the footer. */
+    usageSource?: (() => Promise<ProviderUsage[] | null>) | null;
     /** Zoom (the context menu's Zoom items). Everything inside lays out in
      *  unzoomed CSS px; only the window size and the placement Rust returns
      *  (window px) cross the zoom, so they are scaled at that boundary. */
@@ -253,7 +254,7 @@
       const loop = visibilityGatedLoop(
         async () => {
           const next = await source();
-          if (alive) usage = next;
+          if (alive && next !== null) usage = next;
         },
         () => USAGE_POLL_MS,
       );
@@ -544,8 +545,8 @@
       untrack(() => void hide()); // answered, and it moved on
     } else if (kind === "idle" && folded.length === 0) {
       untrack(() => void hide());
-    } else if (kind === "usage" && openUsage === null) {
-      untrack(() => void hide()); // the provider's usage went away
+    } else if (kind === "usage" && !rings.some((r) => r.provider === openProvider)) {
+      untrack(() => void hide()); // the provider's ring went away (gone, or no windows)
     }
   });
 

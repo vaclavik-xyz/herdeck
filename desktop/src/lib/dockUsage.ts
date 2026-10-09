@@ -63,15 +63,17 @@ export function parseUsage(raw: unknown): ProviderUsage[] {
   return providers.map(parseProvider).filter((p): p is ProviderUsage => p !== null);
 }
 
-/** GET /usage through `agent_call`; any failure is an empty list. */
-export async function fetchUsage(invoke: InvokeFn): Promise<ProviderUsage[]> {
+/** GET /usage through `agent_call`: the providers of a successful answer
+ *  (possibly none), or null when the call failed — unknown, so the dock keeps
+ *  what it last showed instead of dropping the footer on a blip. */
+export async function fetchUsage(invoke: InvokeFn): Promise<ProviderUsage[] | null> {
   try {
     const raw = (await invoke("agent_call", { method: "GET", path: "/usage" })) as
       | { status?: unknown; body?: unknown }
       | null;
-    return raw?.status === 200 ? parseUsage(raw.body) : [];
+    return raw?.status === 200 ? parseUsage(raw.body) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
