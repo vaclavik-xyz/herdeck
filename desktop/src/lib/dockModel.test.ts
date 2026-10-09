@@ -99,9 +99,16 @@ describe("liveSince / neutralReason / parsePlacement", () => {
   });
 
   it("parses dock_layout's reply and defaults anything else", () => {
-    expect(parsePlacement({ side: "left", stripX: 308, stripY: 4 })).toEqual({ side: "left", stripX: 308, stripY: 4 });
-    expect(parsePlacement({ side: "up", stripX: 1, stripY: 2 })).toEqual({ side: "right", stripX: 0, stripY: 0 });
-    expect(parsePlacement(null)).toEqual({ side: "right", stripX: 0, stripY: 0 });
+    expect(parsePlacement({ side: "left", stripX: 308, stripY: 4 })).toEqual({ side: "left", stripX: 308, stripY: 4, edge: null });
+    expect(parsePlacement({ side: "right", stripX: -50, stripY: 0, edge: "right" })).toEqual({
+      side: "right",
+      stripX: -50,
+      stripY: 0,
+      edge: "right",
+    });
+    expect(parsePlacement({ side: "right", stripX: 0, stripY: 0, edge: "top" }).edge).toBeNull();
+    expect(parsePlacement({ side: "up", stripX: 1, stripY: 2 })).toEqual({ side: "right", stripX: 0, stripY: 0, edge: null });
+    expect(parsePlacement(null)).toEqual({ side: "right", stripX: 0, stripY: 0, edge: null });
   });
 });
 

@@ -192,6 +192,13 @@
     });
     return () => void unlisten.then((stop) => stop());
   });
+  // A drag of the dock ended (Rust may have snapped it to a screen edge):
+  // the dock lays out again and learns the edge its autohide needs.
+  $effect(() => {
+    if (!dockMode) return;
+    const unlisten = listen("dock-moved", () => miniDock?.relayout());
+    return () => void unlisten.then((stop) => stop());
+  });
   function releaseDockFocus(): void {
     void invoke("dock_release_focus").catch(() => {});
   }

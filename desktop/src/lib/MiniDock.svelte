@@ -16,6 +16,12 @@
   // window and calls `openNextBlocked()`; an open card then takes 1–9 / Tab /
   // T / O / Esc, and the focus goes back to the previous app (`releaseFocus`)
   // after an answer, Esc or Open in herdr.
+  // Edge snap + autohide (dockAutohide.ts): Rust snaps a dropped strip flush
+  // to a near work-area edge and reports the edge in every placement; with
+  // `dock_autohide` on and the strip snapped, it slides out after the pointer
+  // left and Rust shrinks the window to a sliver showing the most urgent
+  // status, until the pointer rests on it. Never while a card or group is
+  // open, the dock has keyboard focus or any agent is blocked.
   import { tick, untrack, type Snippet } from "svelte";
   import DockItem from "./DockItem.svelte";
   import DockCard from "./DockCard.svelte";
@@ -61,6 +67,13 @@
     type DockPrefs,
     type MemberHandlers,
   } from "./dockStrip";
+  import {
+    AUTOHIDE_SLIDE_MS,
+    SLIVER_WIDTH,
+    createAutohide,
+    sliverStatus,
+    type AutohidePhase,
+  } from "./dockAutohide";
   import { blockedOrder, cycleBlocked, dockKeyAction, isTypingTarget } from "./dockKeys";
   import { fmt, locale, setLang } from "./i18n.svelte";
 
@@ -216,6 +229,62 @@
 
   const openKey = $derived(open?.kind === "agent" ? open.key : null);
 
+  // --- edge snap + autohide ---------------------------------------------------
+  // The edge Rust reports the strip snapped to (every placement carries it).
+  let edge = $state<"left" | "right" | null>(null);
+  let ahPhase = $state<AutohidePhase>("shown");
+  // The strip is translated out past its edge (sliding out, or hidden).
+  let slidOut = $state(false);
+  // The window was last laid out as the sliver.
+  let sliverApplied = false;
+  let focused = $state(typeof document !== "undefined" && document.hasFocus());
+  const anyBlocked = $derived(list?.agents.some((a) => a.status === "blocked") ?? false);
+  const sliverTone = $derived(sliverStatus(list?.agents ?? []) ?? "none");
+  const autohide = createAutohide({
+    slideMs: () => (reducedMotion ? 0 : AUTOHIDE_SLIDE_MS),
+    onPhase: (p) => untrack(() => onAutohidePhase(p)),
+  });
+
+  $effect(() => {
+    autohide.update({
+      enabled: prefs.autohide && edge !== null,
+      held: open !== null || expandedGroup !== null || focused || anyBlocked,
+    });
+  });
+
+  function onAutohidePhase(p: AutohidePhase): void {
+    ahPhase = p;
+    if (p === "hiding") {
+      slidOut = true; // CSS slides the strip past the edge…
+    } else if (p === "hidden") {
+      void applyLayout(open !== null); // …then the window shrinks to the sliver
+    } else {
+      void slideIn();
+    }
+  }
+
+  /** Grow the window back first (the strip still translated out of it), then
+   *  let CSS slide the strip in. */
+  async function slideIn(): Promise<void> {
+    if (sliverApplied) {
+      await applyLayout(open !== null);
+      await nextFrame();
+    }
+    if (ahPhase === "shown") slidOut = false;
+  }
+
+  function nextFrame(): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+      else setTimeout(resolve, 16);
+    });
+  }
+
+  /** A drag ended (Rust `dock-moved`): lay out again to learn the edge. */
+  export function relayout(): void {
+    void applyLayout(open !== null);
+  }
+
   // A group's members act like standalone items.
   const memberHandlers: MemberHandlers = {
     enter: (a, top) => enter({ kind: "agent", key: agentKey(a) }, top),
@@ -322,6 +391,7 @@
     const width = kind === "usage" ? USAGE_CARD_WIDTH : kind === "toast" ? TOAST_WIDTH : CARD_WIDTH;
     const maxHeight =
       kind === "usage" ? USAGE_CARD_MAX_HEIGHT : kind === "toast" ? TOAST_HEIGHT : CARD_MAX_HEIGHT;
+    const sliver = ahPhase === "hidden" && !withCard;
     let next: DockPlacement;
     try {
       next = await windowLayout({
@@ -329,11 +399,16 @@
         stripHeight: Math.max(fittedStripHeight, STRIP_WIDTH) * scale,
         cardWidth: withCard ? width * scale : 0,
         cardHeight: withCard ? (anchorTop + maxHeight) * scale : 0,
+        sliverWidth: sliver ? SLIVER_WIDTH * scale : 0,
       });
     } catch {
       next = { side: "right", stripX: 0, stripY: 0 }; // plain browser preview
     }
-    if (seq === layoutSeq) placement = next;
+    if (seq !== layoutSeq) return;
+    placement = next;
+    edge = next.edge ?? null;
+    // Rust only shrinks to the sliver at an edge (it reports none otherwise).
+    sliverApplied = sliver && edge !== null;
   }
 
   /** The strip's height once every group box has finished opening or
@@ -751,14 +826,34 @@
     clearTimeout(shrinkTimer);
     clearTimeout(toastTimer);
     clearTimeout(settleTimer);
+    autohide.destroy();
   });
 </script>
 
-<svelte:window onkeydown={onKey} onblur={() => void hide()} />
+<svelte:window
+  onkeydown={onKey}
+  onfocus={() => (focused = true)}
+  onblur={() => {
+    focused = false;
+    void hide();
+  }}
+/>
 
-<div class="mini-dock" class:reduced={reducedMotion} class:stale role="presentation" style:zoom={scale === 1 ? undefined : String(scale)} onclick={onBackdrop}>
+<div
+  class="mini-dock"
+  class:reduced={reducedMotion}
+  class:stale
+  role="presentation"
+  style:zoom={scale === 1 ? undefined : String(scale)}
+  onclick={onBackdrop}
+  onpointerenter={() => autohide.pointer(true)}
+  onpointerleave={() => autohide.pointer(false)}
+>
   <nav
     class="strip"
+    class:slid-out={slidOut}
+    class:parked={ahPhase === "hidden"}
+    class:out-left={edge === "left"}
     aria-label={m.strip_label}
     bind:this={stripEl}
     style:left="{stripX}px"
@@ -842,6 +937,11 @@
       <span class="offline-dot" role="img" title={m.stale_title} aria-label={m.stale_title}></span>
     {/if}
   </nav>
+  {#if ahPhase === "hidden"}
+    <!-- The hidden dock: a sliver at its edge in the most urgent status's
+         colour; resting the pointer on it brings the strip back. -->
+    <div class="sliver st-{sliverTone}" class:at-left={edge === "left"} aria-hidden="true"></div>
+  {/if}
   {#if open !== null && revealed}
     <div
       class="card-slot"
@@ -911,7 +1011,47 @@
     background: var(--panel);
     border: 1px solid var(--line-strong);
     border-radius: 28px;
-    transition: opacity var(--dur) var(--ease);
+    /* Slides in decelerating… */
+    transition:
+      opacity var(--dur) var(--ease),
+      transform 180ms cubic-bezier(.2, .8, .2, 1);
+  }
+  /* …and out accelerating, past the edge it is snapped to (autohide). */
+  .strip.slid-out {
+    transform: translateX(100%);
+    transition:
+      opacity var(--dur) var(--ease),
+      transform 180ms cubic-bezier(.5, 0, .9, .4);
+  }
+  .strip.slid-out.out-left { transform: translateX(-100%); }
+  /* Hidden behind the sliver: not painted, so its rings stop animating. */
+  .strip.parked { visibility: hidden; }
+  /* The window is the sliver itself; the bar sits inset from the strip's
+     rounded ends, flush with the screen edge and rounded on the inner side. */
+  .sliver {
+    position: absolute;
+    top: 14px;
+    bottom: 14px;
+    left: 0;
+    width: 6px;
+    border-radius: 6px 0 0 6px;
+    background: var(--sliver, var(--line-strong));
+    animation: dock-sliver-in 160ms var(--ease);
+  }
+  .sliver.at-left { border-radius: 0 6px 6px 0; }
+  .sliver.st-blocked { --sliver: var(--st-blocked); animation: dock-sliver-pulse 1.8s var(--ease) infinite; }
+  .sliver.st-waiting { --sliver: var(--st-waiting); }
+  .sliver.st-done { --sliver: var(--st-done); }
+  .sliver.st-working { --sliver: var(--st-working); }
+  .sliver.st-unknown { --sliver: var(--st-unknown); }
+  .sliver.st-idle { --sliver: var(--st-idle); }
+  .stale .sliver { opacity: .55; }
+  @keyframes dock-sliver-in {
+    from { opacity: 0; }
+  }
+  /* Opacity only: composited, no repaint per frame. */
+  @keyframes dock-sliver-pulse {
+    50% { opacity: .45; }
   }
   .stale .strip { opacity: .55; }
   .grip {
@@ -994,8 +1134,10 @@
   }
   .reduced .card-slot { animation: none; }
   .reduced .strip { transition: none; }
+  .reduced .sliver { animation: none; }
   @media (prefers-reduced-motion: reduce) {
     .card-slot { animation: none; }
     .strip { transition: none; }
+    .sliver { animation: none; }
   }
 </style>

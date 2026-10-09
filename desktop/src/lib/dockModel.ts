@@ -109,6 +109,8 @@ export interface DockPlacement {
   side: "left" | "right"; // where the card opens
   stripX: number; // strip offset inside the window, CSS px
   stripY: number;
+  /** The work-area edge the strip is snapped to (null: not snapped). */
+  edge?: "left" | "right" | null;
 }
 
 export interface DockLayoutRequest {
@@ -116,16 +118,20 @@ export interface DockLayoutRequest {
   stripHeight: number;
   cardWidth: number; // 0 = collapse to the strip
   cardHeight: number;
+  /** > 0 (and no card): autohide, shrink to a sliver this wide at the edge. */
+  sliverWidth?: number;
 }
 
 export type WindowLayoutFn = (req: DockLayoutRequest) => Promise<DockPlacement>;
 
-/** Rust `dock_layout`'s `{side, stripX, stripY}`; anything else = collapsed. */
+/** Rust `dock_layout`'s `{side, stripX, stripY, edge}`; anything else =
+ *  collapsed and not snapped. */
 export function parsePlacement(raw: unknown): DockPlacement {
   const v = (raw ?? {}) as Record<string, unknown>;
   const num = (x: unknown) => typeof x === "number" && Number.isFinite(x);
   if ((v.side === "left" || v.side === "right") && num(v.stripX) && num(v.stripY)) {
-    return { side: v.side, stripX: v.stripX as number, stripY: v.stripY as number };
+    const edge = v.edge === "left" || v.edge === "right" ? v.edge : null;
+    return { side: v.side, stripX: v.stripX as number, stripY: v.stripY as number, edge };
   }
-  return { side: "right", stripX: 0, stripY: 0 };
+  return { side: "right", stripX: 0, stripY: 0, edge: null };
 }

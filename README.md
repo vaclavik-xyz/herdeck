@@ -1064,9 +1064,18 @@ ring of its most urgent member (waiting, then done, then working) with a count
 badge. Hover or focus it and the members slide out under it, each a normal
 item with its own card; it folds back 400 ms after the pointer leaves (or on
 Esc), and stays open while one of its members' cards is open. A blocked agent
-never folds into a group: it always stands alone at the top. `dock_autohide`
-(off by default) slides a dock snapped to a screen edge out of the way. All
-three keys are in Settings → Window and apply live after Apply.
+never folds into a group: it always stands alone at the top. All three keys
+are in Settings → Window and apply live after Apply.
+
+Drop the strip within 24 px of the left or right edge of the screen's work
+area and it snaps flush to that edge (on release, never mid-drag). With
+`[desktop].dock_autohide = true` a snapped strip slides out 1.2 s after the
+pointer leaves it, leaving a 6 px sliver at the edge in the most urgent
+status's colour; rest the pointer on the sliver and it slides back in. It
+stays out while a card or group is open, while the dock has keyboard focus
+and while any agent is blocked. A strip that is not snapped never hides. A
+group expanded near the bottom of the screen lifts the strip just enough to
+stay on screen, and it drops back when the group folds.
 
 An agent card also shows the agent's live output: the last eight lines of its
 pane as plain text, updated as it works (it needs a bridge with the

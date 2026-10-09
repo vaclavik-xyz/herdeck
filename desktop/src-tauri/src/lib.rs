@@ -79,11 +79,16 @@ struct AppState {
     deck_always_on_top: Arc<Mutex<bool>>,
     /// The live `[desktop].floating`: what the floating window shows.
     floating: Arc<Mutex<deck_prefs::Floating>>,
-    /// Where the mini dock's strip sits inside the floating window, in
-    /// placement units (`dock_layout`): (0, 0) except while a card is open
-    /// beside it. `Moved` adds it back so the remembered position is the
-    /// strip's own.
-    dock_offset: Arc<Mutex<(f64, f64)>>,
+    /// Where the mini dock's strip sits relative to the floating window, in
+    /// placement units (`dock_layout::DockGeom`): its offset is (0, 0) except
+    /// while a card, the autohide sliver or a lift moves the window off the
+    /// strip's own origin. `Moved` adds it back so the remembered position is
+    /// the strip's own.
+    dock_geom: Arc<Mutex<dock_layout::DockGeom>>,
+    /// The dock window's last `Moved`, and whether a watcher is waiting for
+    /// the drag to end (edge snap, `dock_layout::note_dock_moved`).
+    dock_moved_at: Arc<Mutex<std::time::Instant>>,
+    dock_settling: Arc<AtomicBool>,
     /// Generation-scoped cursor acknowledged only after native delivery.
     notify_cursor: Arc<Mutex<NotifyCursor>>,
     /// True once macOS notification permission is GRANTED. Until then the
@@ -285,7 +290,9 @@ pub fn run() {
         window_state: Arc::new(Mutex::new(startup)),
         deck_always_on_top: Arc::new(Mutex::new(deck_always_on_top)),
         floating: Arc::new(Mutex::new(floating)),
-        dock_offset: Arc::new(Mutex::new((0.0, 0.0))),
+        dock_geom: Arc::new(Mutex::new(dock_layout::DockGeom::default())),
+        dock_moved_at: Arc::new(Mutex::new(std::time::Instant::now())),
+        dock_settling: Arc::new(AtomicBool::new(false)),
         notify_cursor: Arc::new(Mutex::new(NotifyCursor::default())),
         notify_permission: Arc::new(AtomicBool::new(false)),
         rediscover_last: Arc::new(Mutex::new(None)),
@@ -478,10 +485,15 @@ pub fn run() {
                         if deck.is_visible().unwrap_or(false) {
                             // While a dock card is open the window's origin is
                             // not the strip's: remember the strip.
-                            let offset = handle
+                            let (offset, dock) = handle
                                 .try_state::<AppState>()
-                                .map(|s| *s.dock_offset.lock_or_recover())
-                                .unwrap_or((0.0, 0.0));
+                                .map(|s| {
+                                    (
+                                        s.dock_geom.lock_or_recover().offset,
+                                        *s.floating.lock_or_recover() == deck_prefs::Floating::Dock,
+                                    )
+                                })
+                                .unwrap_or(((0.0, 0.0), false));
                             remember_deck_position(
                                 &handle,
                                 dock_layout::strip_origin(
@@ -489,6 +501,11 @@ pub fn run() {
                                     offset,
                                 ),
                             );
+                            // A drop near a screen edge snaps there once the
+                            // drag ends (never mid-drag: no jitter).
+                            if dock {
+                                dock_layout::note_dock_moved(&handle);
+                            }
                         }
                     }
                     _ => {}
