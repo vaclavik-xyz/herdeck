@@ -11,6 +11,11 @@ PY="${HERDECK_PY:-$ROOT/.venv/bin/python}"
 DIST="$DESKTOP/src-tauri/resources"
 WORK="$ROOT/build/pyinstaller-deckapp"
 ASSETS="$ROOT/src/herdeck/assets"
+# Resolve `herdeck` from THIS checkout's src/: the spec's collect_submodules()
+# runs in the build interpreter, and a venv whose editable install points at
+# another checkout (e.g. building from a worktree) would otherwise collect that
+# checkout's modules and freeze a sidecar missing the dynamically imported ones.
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "==> 1/3 pre-rasterize SVG glyphs -> PNG (into the bundled assets dir)"
 "$PY" -c "from herdeck.frozen import prerasterize_assets; print(prerasterize_assets('$ASSETS', '$ASSETS'))"
