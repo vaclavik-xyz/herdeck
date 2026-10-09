@@ -90,10 +90,11 @@
     pointer-events: none;
   }
   .face { position: relative; display: grid; place-items: center; }
-  /* The working arc is an SVG stroke whose dash travels round a fixed circle.
-     Spinning a CSS border with one transparent side looked wobbly: the arc's
-     ends are mitred wedges and the rotated layer resamples off the pixel grid
-     (worse under zoom), so its thickness seemed to breathe as it turned. */
+  /* The working arc is a round-capped SVG stroke on its own layer, spun with
+     `transform` so the compositor turns it without repainting. A CSS border
+     with one transparent side looked wobbly (its ends are mitred wedges);
+     animating stroke-dashoffset instead fixed the look but repainted every
+     frame and cost ~25 % of a core in WebKit's GPU and content processes. */
   .st-working .ring { border-color: color-mix(in srgb, var(--st-working) 18%, transparent); }
   .arc {
     position: absolute;
@@ -102,6 +103,8 @@
     height: 100%;
     pointer-events: none;
     overflow: visible;
+    animation: dock-spin 1.6s linear infinite;
+    will-change: transform;
   }
   .arc circle {
     fill: none;
@@ -109,7 +112,6 @@
     stroke-width: 3;
     stroke-linecap: round;
     stroke-dasharray: 70 30;
-    animation: dock-spin 1.6s linear infinite;
   }
   .st-waiting .ring { border-style: dashed; border-color: var(--st-waiting); }
   .st-done .ring { border-color: var(--st-done); }
@@ -117,7 +119,18 @@
   .st-blocked .ring {
     border-color: var(--st-blocked);
     background: color-mix(in srgb, var(--st-blocked) 22%, transparent);
+  }
+  /* The blocked pulse is a halo layer animated by transform + opacity only
+     (compositor work); animating box-shadow repainted the item every frame. */
+  .st-blocked .ring::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 3px solid color-mix(in srgb, var(--st-blocked) 55%, transparent);
+    opacity: 0;
     animation: dock-pulse 1.8s var(--ease) infinite;
+    will-change: transform, opacity;
   }
   .done-dot {
     position: absolute;
@@ -160,14 +173,14 @@
   }
   .active .ring, .item:focus-visible .ring { box-shadow: 0 0 0 2px var(--accent-ring); }
   .item:focus-visible { outline: none; }
-  @keyframes dock-spin { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
+  @keyframes dock-spin { to { transform: rotate(360deg); } }
   @keyframes dock-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st-blocked) 45%, transparent); }
-    50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--st-blocked) 0%, transparent); }
+    0% { transform: scale(1); opacity: .9; }
+    60%, 100% { transform: scale(1.22); opacity: 0; }
   }
-  :global(.mini-dock.reduced) .ring,
-  :global(.mini-dock.reduced) .arc circle { animation: none; }
+  :global(.mini-dock.reduced) .arc,
+  :global(.mini-dock.reduced) .ring::after { animation: none; }
   @media (prefers-reduced-motion: reduce) {
-    .ring, .arc circle { animation: none; }
+    .arc, .ring::after { animation: none; }
   }
 </style>
