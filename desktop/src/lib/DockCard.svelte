@@ -3,9 +3,13 @@
   // blocked agent its prompt and one button per option, coloured like the
   // deck) or the folded idle agents. Every action goes through the guarded
   // /agent/* routes (agentCardClient.ts): an answer names the prompt revision
-  // it was read under, and every outcome is shown — never assumed.
+  // it was read under, and every outcome is shown — never assumed. Any agent
+  // card also carries a live output tail (DockPreview) and, when the detail
+  // allows free text, a reply field (DockReply).
   import { onMount, untrack } from "svelte";
   import DockMark from "./DockMark.svelte";
+  import DockPreview from "./DockPreview.svelte";
+  import DockReply from "./DockReply.svelte";
   import {
     formatSince,
     type AgentDetail,
@@ -26,6 +30,7 @@
     transport,
     onClose,
     onSent = () => {},
+    onReplyFocus = () => {},
   }: {
     agent?: DockAgent | null;
     idle?: DockAgent[];
@@ -36,7 +41,16 @@
     transport: AgentTransport | null;
     onClose: () => void;
     onSent?: () => void;
+    /** The reply field gained (true) or lost (false) keyboard focus. */
+    onReplyFocus?: (focused: boolean) => void;
   } = $props();
+
+  let replyField = $state<ReturnType<typeof DockReply> | undefined>(undefined);
+
+  /** Put the caret in the reply field; false when this card has none. */
+  export function focusReply(): boolean {
+    return replyField?.focus() ?? false;
+  }
 
   const m = $derived(DOCK_MESSAGES[locale.lang]);
 
@@ -154,6 +168,12 @@
     else rowNotes = { ...rowNotes, [rowKey(target)]: outcomeText(locale.lang, out) };
   }
 
+  // A text reply to a blocked agent answers it like an option would (the dock
+  // closes the card once it moves on); to a working one it is just a nudge.
+  function replySent(): void {
+    if (untrack(() => agent?.status) === "blocked") onSent();
+  }
+
   function optionText(o: AgentOption): string {
     if (armed === o.key) return m.confirm;
     return o.kind === "option" ? `${o.key}. ${o.label}` : o.label;
@@ -186,6 +206,13 @@
       {#if agent.waitingOn}<span>{fmt(m.waiting_on, { what: agent.waitingOn })}</span>{/if}
       {#if agent.subagents > 0}<span>{fmt(m.subagents, { n: agent.subagents })}</span>{/if}
     </p>
+    {#if transport}
+      <DockPreview
+        {transport}
+        agent={{ serverId: agent.serverId, paneId: agent.paneId }}
+        plausible={detail !== null && detail.backend !== "t3" && detail.connected}
+      />
+    {/if}
     {#if blocked}
       {#if detail?.prompt}
         <pre class="prompt" use:scrollEnd={detail.prompt}>{detail.prompt}</pre>
@@ -208,6 +235,16 @@
       {#if sent}<p class="sent">{m.sent}</p>{/if}
     {/if}
     {#if note}<p class="note" role="status">{note}</p>{/if}
+    {#if transport && detail?.canText}
+      <DockReply
+        bind:this={replyField}
+        {transport}
+        agent={{ serverId: agent.serverId, paneId: agent.paneId }}
+        disabled={!detail.connected}
+        onSent={replySent}
+        onFocusChange={onReplyFocus}
+      />
+    {/if}
     {#if detail?.canFocus}
       <button type="button" class="focus" onclick={() => agent && void focusAgent(agent)}>{m.open_herdr}</button>
     {/if}
@@ -232,7 +269,7 @@
   .card {
     box-sizing: border-box;
     width: 300px;
-    max-height: 380px;
+    max-height: 520px; /* dockModel CARD_MAX_HEIGHT */
     overflow: auto;
     padding: var(--s3);
     display: grid;

@@ -739,3 +739,59 @@ describe("MiniDock usage footer", () => {
     }
   });
 });
+
+describe("MiniDock card preview + reply", () => {
+  function termTransport() {
+    const base = fakeAgentTransport();
+    const term = { open: [] as string[], close: [] as string[] };
+    let n = 0;
+    return {
+      term,
+      t: {
+        ...base,
+        async termOpen(ref: { paneId: string }) {
+          term.open.push(ref.paneId);
+          return { ok: true as const, id: `s${++n}` };
+        },
+        termPoll: () => new Promise<never>(() => {}),
+        async termClose(id: string) {
+          term.close.push(id);
+        },
+      },
+    };
+  }
+
+  it("closes the preview session on an agent switch and on close: one at a time", async () => {
+    const tr = termTransport();
+    const { target, cleanup } = render(FLEET, { agentTransport: tr.t });
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(4));
+      hover(items(target)[3]);
+      await vi.waitFor(() => expect(tr.term.open).toEqual(["w"]));
+      hover(items(target)[0]);
+      await vi.waitFor(() => expect(tr.term.open).toEqual(["w", "b2"]));
+      expect(tr.term.close).toEqual(["s1"]);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await vi.waitFor(() => expect(target.querySelector(".card-slot")).toBeNull());
+      expect(tr.term.close).toEqual(["s1", "s2"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("typing a reply pins the card: hovering another item does not swap it", async () => {
+    const tr = termTransport();
+    const { target, cleanup } = render(FLEET, { agentTransport: tr.t });
+    try {
+      await vi.waitFor(() => expect(items(target)).toHaveLength(4));
+      hover(items(target)[3]);
+      await vi.waitFor(() => expect(target.querySelector(".card-slot .reply textarea")).not.toBeNull());
+      target.querySelector<HTMLTextAreaElement>(".card-slot .reply textarea")!.focus();
+      hover(items(target)[0]);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(target.querySelector(".card-slot .title")?.textContent).toBe("Working one");
+    } finally {
+      cleanup();
+    }
+  });
+});

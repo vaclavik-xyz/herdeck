@@ -11,7 +11,9 @@ export const STRIP_WIDTH = 56;
 export const CARD_WIDTH = 300;
 /** Gap between strip and card (dock_layout.rs DOCK_CARD_GAP). */
 export const CARD_GAP = 8;
-export const CARD_MAX_HEIGHT = 380;
+/** Tallest agent card (DockCard .card max-height): prompt + options + the
+ *  output preview + the reply field. Rust dock_layout keeps it on screen. */
+export const CARD_MAX_HEIGHT = 520;
 export const HOVER_OPEN_MS = 120;
 export const HOVER_CLOSE_MS = 250;
 /** Re-poll while the runtime is still reading a blocked prompt. */

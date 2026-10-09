@@ -46,6 +46,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `"needs_you"`) picks who gets an item; the rest fold into `+N`.
   `[desktop].dock_autohide` (default off) is in the editor. All three apply
   live after Apply (`reload_floating` emits `dock-prefs-changed` to the dock).
+- Mini dock card: a live output tail (the last 8 lines of the pane as plain
+  text, from a 100×24 terminal preview session that closes with the card,
+  collapsible and remembered per viewer) and a reply field for agents that
+  take free text (Enter sends via `/agent/text`, Shift+Enter is a newline,
+  sending / sent / error shown inline, the text kept on error).
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)

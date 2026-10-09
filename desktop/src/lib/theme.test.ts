@@ -145,6 +145,8 @@ const CONVERTED = [
   "lib/DockUsageRing.svelte",
   "lib/DockUsageCard.svelte",
   "lib/UsageMark.svelte",
+  "lib/DockPreview.svelte",
+  "lib/DockReply.svelte",
 ];
 
 // Walk src/ once and return every .svelte path relative to src/ — the same

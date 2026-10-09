@@ -1068,6 +1068,14 @@ never folds into a group: it always stands alone at the top. `dock_autohide`
 (off by default) slides a dock snapped to a screen edge out of the way. All
 three keys are in Settings → Window and apply live after Apply.
 
+An agent card also shows the agent's live output: the last eight lines of its
+pane as plain text, updated as it works (it needs a bridge with the
+`terminal_preview` capability; elsewhere the box is simply absent). Fold it
+away with its **Output** header; the dock remembers that per viewer. When the
+agent accepts free text, a reply field sits under the options: Enter sends it
+(`POST /agent/text`, at most 4000 characters), Shift+Enter adds a line, and the
+field clears once the bridge has it (a refused reply keeps your text).
+
 **Maintenance** (Settings → System → Maintenance) does from the app what used
 to need a terminal: it lists the app, runtime and bridge versions (a mismatch
 is flagged), says where the runtime comes from and can make it a service of

@@ -503,6 +503,12 @@
     if (!pinned) scheduleClose();
   }
 
+  // Typing a reply pins the card: hovering another strip item must not swap
+  // it (and drop the text) under the caret.
+  function replyFocus(focused: boolean): void {
+    if (focused && open?.kind === "agent") pinned = true;
+  }
+
   function markSent(): void {
     if (openAgent) sentKey = agentKey(openAgent);
   }
@@ -699,6 +705,7 @@
             transport={agentTransport}
             onClose={() => void hide()}
             onSent={markSent}
+            onReplyFocus={replyFocus}
           />
         {/key}
       {:else if openUsage}
