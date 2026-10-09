@@ -65,7 +65,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for the mouse button to come up, so a pause mid-drag never snaps). With
   `[desktop].dock_autohide` on, a snapped strip slides out (180 ms, CSS
   transform) 1.2 s after the pointer leaves and the window shrinks to a 6 px
-  sliver in the most urgent status's colour (blocked pulses); resting on it
+  sliver in the most urgent status's colour; resting on it
   slides the strip back. A card, an expanded group, keyboard focus or any
   blocked agent keeps it out. `dock_layout` takes `sliverWidth` and reports
   the snapped `edge`; Rust emits `dock-moved` after a drop.

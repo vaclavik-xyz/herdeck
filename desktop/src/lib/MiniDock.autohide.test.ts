@@ -207,4 +207,56 @@ describe("MiniDock autohide", () => {
       cleanup();
     }
   });
+
+  it("a sliver reply that lands after the strip was brought back is not applied", async () => {
+    // Hold Rust's answer to the sliver request until the autohide state moved on.
+    let release: (() => void) | null = null;
+    const layouts: DockLayoutRequest[] = [];
+    const windowLayout = vi.fn(async (req: DockLayoutRequest): Promise<DockPlacement> => {
+      layouts.push(req);
+      if ((req.sliverWidth ?? 0) > 0) {
+        await new Promise<void>((resolve) => (release = resolve));
+        return { side: "left", stripX: req.sliverWidth! - req.stripWidth, stripY: 0, edge: "right" };
+      }
+      return { side: "left", stripX: 0, stripY: 0, edge: "right" };
+    });
+    const { target, cleanup } = render(CALM, { windowLayout });
+    try {
+      await vi.advanceTimersByTimeAsync(HIDE_MS);
+      expect(lastLayout(layouts).sliverWidth).toBe(6);
+      expect(release).not.toBeNull();
+      // Focus arrives (the hotkey, a click) while Rust is still shrinking.
+      window.dispatchEvent(new FocusEvent("focus"));
+      await vi.advanceTimersByTimeAsync(20);
+      release!();
+      await vi.advanceTimersByTimeAsync(20);
+      // The stale sliver reply was dropped and the full window asked for again.
+      expect(lastLayout(layouts).sliverWidth).toBe(0);
+      expect(strip(target).style.left).toBe("0px");
+      expect(strip(target).classList.contains("slid-out")).toBe(false);
+      expect(strip(target).classList.contains("parked")).toBe(false);
+      window.dispatchEvent(new FocusEvent("blur"));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("the sliver bar shows only once the window is the sliver", async () => {
+    let release: (() => void) | null = null;
+    const windowLayout = vi.fn(async (req: DockLayoutRequest): Promise<DockPlacement> => {
+      if ((req.sliverWidth ?? 0) > 0) await new Promise<void>((resolve) => (release = resolve));
+      return { side: "left", stripX: 0, stripY: 0, edge: "right" };
+    });
+    const { target, cleanup } = render(CALM, { windowLayout });
+    try {
+      await vi.advanceTimersByTimeAsync(HIDE_MS);
+      expect(strip(target).classList.contains("parked")).toBe(true);
+      expect(sliver(target)).toBeNull(); // the window is still full width
+      release!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sliver(target)).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
 });

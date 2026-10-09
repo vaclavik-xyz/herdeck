@@ -227,6 +227,20 @@ pub(crate) struct DockGeom {
     pub(crate) settled: Option<(i32, i32)>,
 }
 
+/// Record a layout in the geometry state. `settled` is seeded only by the
+/// FIRST layout (launch, or after a floating switch reset it), so the moves
+/// that layout causes are known to be ours — a lift folded into the
+/// remembered origin would otherwise stick. Later layouts leave it alone: one
+/// landing between a drop and its settle must not swallow the snap.
+pub(crate) fn note_layout(geom: &mut DockGeom, plan: &FramePlan, remembered: (i32, i32), strip: (f64, f64)) {
+    geom.offset = plan.offset;
+    geom.lift = plan.lift;
+    geom.strip = strip;
+    if geom.settled.is_none() {
+        geom.settled = Some(remembered);
+    }
+}
+
 /// A user drop, settled: move the window by `dx` (the snap) and remember the
 /// strip at `remembered`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -375,12 +389,7 @@ pub(crate) fn dock_layout(
         let card = (card_width > 0.0).then_some((card_width * css, card_height * css));
         let sliver = sliver_width.unwrap_or(0.0).max(0.0) * css;
         plan = plan_frame(strip, area, card, sliver, DOCK_CARD_GAP * css);
-        geom.offset = plan.offset;
-        geom.lift = plan.lift;
-        geom.strip = (strip.w, strip.h);
-        // `settled` is left alone: a layout landing between a drop and its
-        // settle must not swallow the snap (the remembered origin it keeps is
-        // the dropped one, which settle has not seen yet).
+        note_layout(&mut geom, &plan, (sx, sy), (strip.w, strip.h));
     }
     let frame = plan.frame;
     let _ = window.set_size(placement_size(is_windows, frame.window.w, frame.window.h));
@@ -747,6 +756,24 @@ mod tests {
         let window = (p.frame.window.x as i32, p.frame.window.y as i32);
         let s = settle(&mut g, window, AREA, 24.0).expect("still a drop");
         assert_eq!(s, Settled { dx: 10.0, remembered: (1384, 200) });
+    }
+
+    #[test]
+    fn the_first_layout_seeds_settled_so_its_own_lift_is_not_a_drop() {
+        // Launch: the first layout is a group expanded near the bottom.
+        let tall = Rect { x: 40.0, y: 200.0, w: 56.0, h: 760.0 };
+        let mut g = DockGeom::default();
+        let p = plan_frame(tall, AREA, None, 0.0, 0.0);
+        note_layout(&mut g, &p, (40, 200), (56.0, 760.0));
+        assert_eq!(g.settled, Some((40, 200)));
+        // The window moved up by the lift: our own move, nothing settles,
+        // the remembered origin keeps its place (the strip drops back later).
+        let window = (p.frame.window.x as i32, p.frame.window.y as i32);
+        assert_eq!(settle(&mut g, window, AREA, 24.0), None);
+        assert_eq!(strip_origin(window, g.offset), (40, 200));
+        // A later layout does not overwrite it.
+        note_layout(&mut g, &p, (900, 900), (56.0, 760.0));
+        assert_eq!(g.settled, Some((40, 200)));
     }
 
     #[test]

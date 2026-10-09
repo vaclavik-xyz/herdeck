@@ -236,7 +236,9 @@
   // The strip is translated out past its edge (sliding out, or hidden).
   let slidOut = $state(false);
   // The window was last laid out as the sliver.
-  let sliverApplied = false;
+  // (Rendered: the sliver bar shows only once the window IS the sliver, so a
+  // right-edge bar never flashes inside the still full-width window.)
+  let sliverApplied = $state(false);
   let focused = $state(typeof document !== "undefined" && document.hasFocus());
   const anyBlocked = $derived(list?.agents.some((a) => a.status === "blocked") ?? false);
   const sliverTone = $derived(sliverStatus(list?.agents ?? []) ?? "none");
@@ -405,6 +407,15 @@
       next = { side: "right", stripX: 0, stripY: 0 }; // plain browser preview
     }
     if (seq !== layoutSeq) return;
+    // The autohide state moved on while Rust answered (e.g. a sliver request
+    // in flight when a blocked agent, focus or the pref brought the strip
+    // back): this reply describes a window we no longer want. Ignore it and
+    // ask for the current one, or the window could stay a sliver while the
+    // strip is meant to be out.
+    if (sliver !== (ahPhase === "hidden" && open === null)) {
+      void applyLayout(open !== null);
+      return;
+    }
     placement = next;
     edge = next.edge ?? null;
     // Rust only shrinks to the sliver at an edge (it reports none otherwise).
@@ -937,7 +948,7 @@
       <span class="offline-dot" role="img" title={m.stale_title} aria-label={m.stale_title}></span>
     {/if}
   </nav>
-  {#if ahPhase === "hidden"}
+  {#if ahPhase === "hidden" && sliverApplied}
     <!-- The hidden dock: a sliver at its edge in the most urgent status's
          colour; resting the pointer on it brings the strip back. -->
     <div class="sliver st-{sliverTone}" class:at-left={edge === "left"} aria-hidden="true"></div>
@@ -1039,6 +1050,7 @@
     animation: dock-sliver-in 160ms var(--ease);
   }
   .sliver.at-left { border-radius: 0 6px 6px 0; }
+  /* A blocked agent holds the strip out, so this is only a safety net. */
   .sliver.st-blocked { --sliver: var(--st-blocked); animation: dock-sliver-pulse 1.8s var(--ease) infinite; }
   .sliver.st-waiting { --sliver: var(--st-waiting); }
   .sliver.st-done { --sliver: var(--st-done); }
