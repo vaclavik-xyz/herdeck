@@ -129,9 +129,13 @@ def active_plan(detail):
     markdown = plan.get("markdown") or ""
     if not markdown:
         for item in _items(detail):
-            if item.get("type") == "proposed_plan" and (
-                    item.get("planId") == plan.get("id") or item.get("nodeId") == plan.get("nodeId")):
+            if item.get("type") != "proposed_plan":
+                continue
+            by_id = plan.get("id") is not None and item.get("planId") == plan.get("id")
+            by_node = plan.get("nodeId") is not None and item.get("nodeId") == plan.get("nodeId")
+            if by_id or by_node:
                 markdown = item.get("markdown") or ""
+                break
     return {**plan, "markdown": markdown}
 
 

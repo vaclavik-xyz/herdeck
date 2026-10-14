@@ -230,3 +230,16 @@ def test_revision_stability_and_sensitivity():
     feat = thread_state("srv", shell(status="completed", lastVisitedAt=iso(-10)), None, {}, "e1",
                         features={"x": True}, now=NOW)
     assert a.backend_revision != feat.backend_revision
+
+
+def test_plan_fallback_ignores_unrelated_items_without_node_id():
+    detail = {"plans": [{"id": "p1", "kind": "proposed_plan", "status": "active"}],
+              "turnItems": [{"type": "proposed_plan", "planId": "other", "markdown": "unrelated"}]}
+    assert active_plan(detail)["markdown"] == ""
+
+
+def test_plan_fallback_first_matching_item_wins():
+    detail = {"plans": [{"id": "p1", "kind": "proposed_plan", "status": "active"}],
+              "turnItems": [{"type": "proposed_plan", "planId": "p1", "markdown": "first"},
+                            {"type": "proposed_plan", "planId": "p1", "markdown": "second"}]}
+    assert active_plan(detail)["markdown"] == "first"
