@@ -50,13 +50,6 @@ _DELIVERY_MEMORY = 256
 _read_state_warned = False
 
 
-def validate_shell(shell):
-    if not isinstance(shell, dict) or any(
-        not isinstance(shell.get(field), list) for field in ("threads", "archivedThreads", "projects")
-    ):
-        raise T3Error("Unsupported T3 shell contract")
-
-
 class _IncompatibleServer(T3Error):
     """The descriptor does not speak orchestration protocol 2."""
 
@@ -110,6 +103,8 @@ class T3Connector:
         # /health diagnostics, same shape as the herdr Connector.health(): a
         # T3 server that never answered (configured but not running) is not
         # "down", so the window stays quiet about it (ever_connected=False).
+        # Any answer counts (incompatible descriptor, HTTP 4xx), so those
+        # errors stay visible while connected stays False.
         self._connected = False
         self._ever_connected = False
         self._since_ms = int(time.time() * 1000)
@@ -158,6 +153,7 @@ class T3Connector:
     async def refresh(self, force: str | None = None):
         if self._features is None:
             descriptor = await asyncio.to_thread(self.client.descriptor)
+            self._ever_connected = True  # it answered, even if incompatible
             try:
                 features = negotiate(descriptor)
             except Incompatible as exc:
@@ -165,7 +161,6 @@ class T3Connector:
                 raise _IncompatibleServer(str(exc)) from None
             self._features = features
         shell = await asyncio.to_thread(self.client.shell)
-        validate_shell(shell)
         projects = {p["id"]: p for p in shell["projects"]
                     if isinstance(p, dict) and isinstance(p.get("id"), str)}
         now = self._clock()
@@ -273,6 +268,8 @@ class T3Connector:
                 self._set_connected(True)
                 online = True
             except (T3Error, *_MALFORMED) as exc:
+                if getattr(exc, "code", None) is not None:
+                    self._ever_connected = True  # an HTTP answer, not a dead transport
                 self.last_connect_error = _connect_error(exc)
                 if online:
                     self._epoch = uuid.uuid4().hex
@@ -356,6 +353,10 @@ class T3Connector:
                     await self.client.dispatch(command)
                     break
                 except T3Rejected as exc:
+                    if attempt == 2 and getattr(exc, "handshake", False):
+                        # The retry never reached the command, and attempt 1
+                        # is unknown: the first may have run.
+                        return "uncertain", None
                     return "rejected", exc.reason
                 except Exception as exc:  # any other failure: the outcome is unknown
                     if getattr(exc, "code", None) == 401 and attempt == 1:
@@ -384,6 +385,8 @@ class T3Connector:
             result = {"ok": False, "rejected": True, "message": reason}
         self._on_result(req, result)
         try:
+            # Only called from send(), which holds self._lock (asyncio.Lock is
+            # not reentrant), so this refresh cannot race run().
             await self.refresh(force=tid)
         except (T3Error, *_MALFORMED):
             pass  # the poll loop reports connection problems

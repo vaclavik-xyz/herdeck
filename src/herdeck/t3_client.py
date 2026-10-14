@@ -33,9 +33,12 @@ class T3Error(Exception):
 class T3Rejected(T3Error):
     """The server answered the command and refused it (it did not run)."""
 
-    def __init__(self, reason):
+    def __init__(self, reason, handshake=False):
         super().__init__("T3 rejected the command: " + reason)
         self.reason = reason
+        # True when the WebSocket upgrade was refused: the command frame was
+        # never read, so on a retry it says nothing about the first attempt.
+        self.handshake = handshake
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -163,7 +166,8 @@ class T3Client:
             if code in (401, 403, 426):
                 raise T3Rejected({401: "credential invalid or expired",
                                   403: "credential lacks orchestration:operate",
-                                  426: "T3 orchestration protocol mismatch"}[code]) from None
+                                  426: "T3 orchestration protocol mismatch"}[code],
+                                 handshake=True) from None
             raise T3Error(f"T3 WebSocket HTTP {code}", code) from None
         except (OSError, TimeoutError, ValueError, websockets.WebSocketException):
             raise T3Error("T3 dispatch outcome unknown") from None

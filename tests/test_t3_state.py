@@ -67,6 +67,16 @@ CASES = [
     ({"status": "completed", "pendingBackgroundTasks": [{"taskId": "a", "kind": "subagent"}]}, {},
      Status.WAITING, "", "SUBAGENT"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "command"}]}, {}, Status.WAITING, "", "COMMAND"),
+    # A running command (dev server) does not hold a completed run; upstream
+    # backgroundWorkHoldsCompletion. Unknown kinds still hold.
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command"}],
+      "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, D, "completion", ""),
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command"}],
+      "latestRunCompletedAt": iso(-300), "lastVisitedAt": iso(-60)}, {}, ID, "", ""),
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command"}, {"kind": "subagent"}]}, {},
+     Status.WAITING, "", "SUBAGENT"),
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "future_kind"}]}, {},
+     Status.WAITING, "", "WAITING"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "monitor"}]}, {}, Status.WAITING, "", "MONITOR"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "background_task"}]}, {},
      Status.WAITING, "", "BACKGROUND"),

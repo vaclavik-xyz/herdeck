@@ -164,3 +164,54 @@ def test_dropped_socket_is_an_unknown_outcome_not_a_rejection(http_server):
     with pytest.raises(T3Error) as err:
         asyncio.run(run())
     assert not isinstance(err.value, T3Rejected)
+
+
+@pytest.mark.parametrize("status,reason", [
+    (401, "credential invalid or expired"),
+    (403, "credential lacks orchestration:operate"),
+    (426, "T3 orchestration protocol mismatch"),
+])
+def test_refused_upgrade_is_a_handshake_rejection(http_server, status, reason):
+    _, url = http_server
+    _Handler.routes[("POST", "/api/auth/websocket-ticket")] = (200, {"ticket": "tk", "expiresAt": "x"})
+
+    async def run():
+        def refuse(connection, request):
+            return connection.respond(status, "no\n")
+
+        async def handler(ws):
+            pass
+        server = await websockets.serve(handler, "127.0.0.1", 0, process_request=refuse)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            await _client(port, url).dispatch({"type": "thread.visit", "commandId": "c", "threadId": "t", "visitedAt": "x"})
+        finally:
+            server.close()
+
+    with pytest.raises(T3Rejected) as err:
+        asyncio.run(run())
+    assert err.value.reason == reason and err.value.handshake is True
+
+
+def test_a_command_rejection_is_not_a_handshake_rejection():
+    assert T3Rejected("x").handshake is False
+
+
+def test_other_upgrade_statuses_are_unknown_outcomes_with_the_code(http_server):
+    _, url = http_server
+    _Handler.routes[("POST", "/api/auth/websocket-ticket")] = (200, {"ticket": "tk", "expiresAt": "x"})
+
+    async def run():
+        async def handler(ws):
+            pass
+        server = await websockets.serve(handler, "127.0.0.1", 0,
+                                        process_request=lambda c, r: c.respond(503, "no\n"))
+        port = server.sockets[0].getsockname()[1]
+        try:
+            await _client(port, url).dispatch({"type": "thread.visit", "commandId": "c", "threadId": "t", "visitedAt": "x"})
+        finally:
+            server.close()
+
+    with pytest.raises(T3Error) as err:
+        asyncio.run(run())
+    assert not isinstance(err.value, T3Rejected) and err.value.code == 503

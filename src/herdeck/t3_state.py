@@ -78,6 +78,11 @@ def classify(shell, now, life):
     if st == "running":
         return Status.WORKING, "", "", st
     tasks = shell.get("pendingBackgroundTasks") or []
+    if st == "completed":
+        # Mirrors upstream backgroundWorkHoldsCompletion: a command (a dev
+        # server left running) does not hold a finished run; subagents,
+        # monitors, background tasks and unknown kinds do.
+        tasks = [t for t in tasks if t.get("kind") != "command"]
     if st == "waiting" or (st == "completed" and tasks):
         kind = (tasks[0].get("kind") if tasks else "") or ""
         return Status.WAITING, "", _TASK_LABELS.get(kind, "WAITING"), "waiting"

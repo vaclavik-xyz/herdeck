@@ -11,7 +11,7 @@ from herdeck import t3 as t3mod
 from herdeck.config import Config, ServerConfig
 from herdeck.model import AgentKey, AgentState, Status
 from herdeck.orchestrator import Orchestrator
-from herdeck.t3 import T3Connector, T3Error, T3Http, validate_shell
+from herdeck.t3 import T3Connector, T3Error, T3Http
 from herdeck.t3_client import T3Rejected
 from herdeck.t3_state import timestamp
 
@@ -176,6 +176,42 @@ async def test_descriptor_is_negotiated_once_per_connection_and_again_after_a_dr
     assert [up for _, up in h.connections][:4] == [True, True, False, True]
     assert client.descriptor_calls == 2
     assert h.c._epoch != epoch and h.c.health()["ever_connected"] is True
+
+
+@pytest.mark.asyncio
+async def test_incompatible_server_counts_as_answered_so_its_error_stays_visible():
+    client = FakeClient(thread("completed"))
+    client.desc = {"environmentId": "e", "serverVersion": "0.0.45"}
+    h = Harness(client)
+    await h.run_rounds()
+    health = h.c.health()
+    assert health["ever_connected"] is True and health["connected"] is False
+    assert health["last_error"] == "T3 server speaks orchestration protocol 1; Herdeck needs 2 (T3 0.0.46+)"
+
+
+@pytest.mark.asyncio
+async def test_an_http_error_answer_counts_as_answered():
+    client = FakeClient(thread("completed"))
+    client.shell_error = T3Error("T3 HTTP 401", 401)
+    h = Harness(client)
+    await h.run_rounds()
+    health = h.c.health()
+    assert health["ever_connected"] is True and health["connected"] is False
+    assert health["last_error"] == "T3 credential invalid or expired"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_connection_before_any_answer_stays_never_connected():
+    client = FakeClient(thread("completed"))
+
+    def refused():
+        raise T3Error("T3 transport or response error")
+    client.descriptor = refused
+    h = Harness(client)
+    await h.run_rounds()
+    health = h.c.health()
+    assert health["ever_connected"] is False and health["connected"] is False
+    assert health["last_error"] == "T3 unavailable; check the connection"
 
 
 def test_health_before_any_connect_reports_never_connected():
@@ -484,6 +520,47 @@ async def test_a_rejected_command_mints_a_new_id_on_the_next_press():
 
 
 @pytest.mark.asyncio
+async def test_a_refused_retry_handshake_after_an_unknown_attempt_is_uncertain():
+    client = FakeClient(thread("approval"))
+    tid = tid_of("approval")
+    client.outcomes = [T3Error("lost"), T3Rejected("credential invalid or expired", handshake=True),
+                       {"sequence": 3}]
+    h = Harness(client)
+    await h.c.refresh()
+    msg = await h.press(tid, "approve")
+    assert h.results[-1]["uncertain"] is True and "rejected" not in h.results[-1]
+    assert tid in h.c._uncertain
+    await h.c.send({**msg, "req": "again"})
+    assert [c["commandId"] for c in client.commands] == [client.commands[0]["commandId"]] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_handshake_rejection_on_the_first_attempt_is_still_a_rejection():
+    client = FakeClient(thread("approval"))
+    client.outcomes = [T3Rejected("credential lacks orchestration:operate", handshake=True)]
+    h = Harness(client)
+    await h.c.refresh()
+    await h.press(tid_of("approval"), "approve")
+    assert h.results[-1]["rejected"] is True and len(client.commands) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_post_delivery_refresh_runs_under_the_lock():
+    client = FakeClient(thread("approval"))
+    h = Harness(client)
+    await h.c.refresh()
+    held = []
+    original = h.c.refresh
+
+    async def spy(force=None):
+        held.append(h.c._lock.locked())
+        return await original(force=force)
+    h.c.refresh = spy
+    await h.press(tid_of("approval"), "approve")
+    assert held and all(held)  # the pre-press and post-delivery refreshes
+
+
+@pytest.mark.asyncio
 async def test_ticket_401_is_reported_as_an_invalid_credential_without_retry():
     client = FakeClient(thread("approval"))
     client.outcomes = [T3Error("T3 HTTP 401", 401)]
@@ -585,13 +662,6 @@ def test_desktop_read_state_is_obsolete_and_logs_once(caplog, monkeypatch):
     warning = ("[[servers]] desktop_read_state is obsolete: "
                "T3 0.0.46+ keeps read state on the server")
     assert caplog.text.count(warning) == 1
-
-
-def test_validate_shell_requires_v2_lists():
-    validate_shell({"threads": [], "archivedThreads": [], "projects": []})
-    for bad in ({"threads": [], "projects": []}, {"threads": {}, "archivedThreads": [], "projects": []}, []):
-        with pytest.raises(T3Error, match="Unsupported T3 shell contract"):
-            validate_shell(bad)
 
 
 @pytest.mark.parametrize("url", ["http://example.com", "http://127.0.0.1/?token=secret",
