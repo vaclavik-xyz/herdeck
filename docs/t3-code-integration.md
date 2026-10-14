@@ -66,7 +66,7 @@ First matching row wins, lifecycle first (`src/herdeck/t3_state.py`).
 | `preparing` / `starting` | WORKING | CONNECTING |
 | `queued`, or a message sent in the last 2 minutes that no run has picked up | WORKING | QUEUED |
 | `running` | WORKING | none |
-| `waiting`, or `completed` with pending background tasks | WAITING | SUBAGENT / COMMAND / MONITOR / BACKGROUND (first task) |
+| `waiting`, or `completed` with a pending background task other than `command` | WAITING | SUBAGENT / COMMAND / MONITOR / BACKGROUND (first holding task) |
 | `failed` | UNKNOWN | ERROR, or LIMIT for `usage_limit`; preview `T3 error: ...` |
 | plan mode, an actionable proposed plan and no active run (settled) | BLOCKED | PLAN READY |
 | `completed` and `latestRunCompletedAt` newer than `lastVisitedAt` | DONE | completion |
@@ -117,8 +117,11 @@ remembered per thread, revision, action, payload and reply text.
 - Transport failure: the same command is retried once after one second.
 - Still failing: the result is uncertain. The tile stays read-only until the
   thread changes, because the command either landed (the thread changes) or
-  did not. An identical press (same revision, action, payload) resends the
-  same `commandId`, which T3 de-duplicates, so a command cannot run twice.
+  did not. The deck offers no buttons on the read-only tile; a client that
+  still holds the older revision (for example herdeck-ctl) can send the
+  identical press (same revision, action, payload), which resends the same
+  `commandId`, which T3 de-duplicates, so a command cannot run twice. A
+  refused WebSocket upgrade on the retry also counts as uncertain.
 - Rejected by the server (`Fail`, `Die`, missing scope): the message is
   reported, the revision is not consumed and the stored ids are dropped.
 - Accepted: the thread is refreshed immediately. Implement plan is two
@@ -135,7 +138,8 @@ remembered per thread, revision, action, payload and reply text.
 - Approval answers are offered only for live requests, and questions only when
   there is one single-choice question. Everything else says "Answer in T3".
 - After an uncertain delivery the tile stays read-only until the thread
-  changes; an identical press safely resends the same command.
+  changes; the deck offers no buttons meanwhile, and only a client holding the
+  older revision (for example herdeck-ctl) can resend the same command.
 - The deck reports a T3 rejected or uncertain result as "sent". The result is
   in the connector (`rejected` / `uncertain` with a message) but the deck does
   not show it yet. This is tracked as a follow-up.

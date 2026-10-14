@@ -715,7 +715,8 @@ value. Persistent approvals use exact provider options and require two presses.
 Raw keys, terminal streaming and desktop thread navigation are not supported.
 Delivery is idempotent: a failed send is retried once with the same command id,
 and if the outcome stays unknown the tile is read-only until the thread
-changes (an identical press then safely resends the same command). The deck
+changes (the deck offers no buttons meanwhile; only a client still holding the
+older revision, e.g. herdeck-ctl, can resend the same command). The deck
 currently reports T3 rejected or uncertain results as "sent"; this is a known
 follow-up.
 
