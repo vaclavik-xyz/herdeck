@@ -25,7 +25,7 @@ def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatc
             return dict(expiresAt="2099-01-01T00:00:00Z" if case == "fresh" else "2020-01-01T00:00:00Z")
         if case == "verify_failure":
             raise t3_renew.T3Error("Rejected", 401)
-        return dict(threads=[]) if case == "contract_failure" else dict(threads=[], projects=[])
+        return dict(threads=[]) if case == "contract_failure" else dict(threads=[], archivedThreads=[], projects=[])
     monkeypatch.setattr(t3_renew.T3Http, "get", get)
     def run(*a, **kw):
         if case == "restart_failure":

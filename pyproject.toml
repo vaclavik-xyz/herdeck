@@ -22,7 +22,7 @@ classifiers = [
   "Operating System :: MacOS",
   "Operating System :: POSIX",
 ]
-dependencies = ["websockets>=14", "keyring", "tomli-w"]
+dependencies = ["websockets>=15", "keyring", "tomli-w"]
 
 [project.urls]
 Homepage = "https://github.com/vaclavik-xyz/herdeck"
@@ -41,7 +41,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pillow>=10", "resvg-py>=0.5", "ruff
 # in the bundle), and the frozen elgato-path runtime deps that must be importable
 # so PyInstaller can trace them (pillow, websockets). `pip install -e .[packaging]` makes the
 # build-plugin.sh pipeline reproducible in a clean env.
-packaging = ["pyinstaller>=6", "resvg-py>=0.5", "pillow>=10", "websockets>=14", "keyring", "tomli-w"]
+packaging = ["pyinstaller>=6", "resvg-py>=0.5", "pillow>=10", "websockets>=15", "keyring", "tomli-w"]
 
 [project.scripts]
 herdeck = "herdeck.host:main"

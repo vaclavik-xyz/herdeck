@@ -40,7 +40,7 @@ def test_setup_keychain_backup_and_rollback(tmp_path, monkeypatch, capsys, fail_
     monkeypatch.setattr(t3_setup.subprocess, "check_output", lambda *a, **kw:
         json.dumps({"token": secret, "sessionId": "session", "expiresAt": "later"}))
     monkeypatch.setattr(t3_setup.subprocess, "run", lambda *a, **kw: revoked.append(a))
-    monkeypatch.setattr(t3_setup.T3Http, "get", lambda *a: {"threads": []} if fail_write == "contract" else {"threads": [], "projects": []})
+    monkeypatch.setattr(t3_setup.T3Http, "get", lambda *a: {"threads": []} if fail_write == "contract" else {"threads": [], "archivedThreads": [], "projects": []})
     if fail_write:
         real = t3_setup.atomic_write
         monkeypatch.setattr(t3_setup, "atomic_write", lambda p, text:

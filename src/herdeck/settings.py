@@ -317,6 +317,8 @@ def _server_config(raw: dict) -> ServerConfig:
     backend = raw.get("backend", "herdr")
     if backend not in ("herdr", "t3"):
         raise ConfigError("unsupported server backend")
+    # Obsolete since T3 orchestration protocol 2 (read state lives on the
+    # server); still validated so existing configs keep loading. No behaviour.
     desktop_read_state = raw.get("desktop_read_state", False)
     if not isinstance(desktop_read_state, bool):
         raise ConfigError(f"server '{raw['id']}': desktop_read_state must be true or false")
