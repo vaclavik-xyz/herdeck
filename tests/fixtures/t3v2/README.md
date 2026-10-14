@@ -14,6 +14,7 @@ last 12, local paths replaced by `/Users/dev/...`.
 | `shell_failed.json`, `detail_failed.json` | live, provider 401 (`status: failed`, `lastErrorClass: provider_error`) |
 | `shell_plan.json`, `detail_plan.json` | live, plan mode right after the plan was proposed: `status: waiting`, `hasActionableProposedPlan: true`, active `plans[]` entry |
 | `shell_approval.json`, `detail_approval.json` | built from the contract on top of `*_completed` (a live approval could not be provoked: the local Claude permission settings allowed the command) — pending `command` request with a live `runtimeRequests[]` entry and an `approval_request` turn item |
+| `shell_approval_live.json`, `detail_approval_live.json` | live, Claude provider, real `file-change` approval request (approved afterwards): `options: null`, prompt = the file path (`NOTES.md`), live `runtimeRequests[]` entry; maps to the default Approve/Deny |
 | `shell_input.json`, `detail_input.json` | built from the contract the same way — pending `user_input` request with one single-choice question |
 
 Contract reference: `docs/t3-code-integration.md`.

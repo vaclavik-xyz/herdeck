@@ -6,7 +6,7 @@ import pytest
 
 from herdeck.model import Status
 from herdeck.t3_actions import Incompatible, build_commands, capabilities, negotiate, thread_actions
-from herdeck.t3_state import active_plan, thread_state, timestamp
+from herdeck.t3_state import active_plan, live_request, thread_state, timestamp
 
 FIX = Path(__file__).parent / "fixtures" / "t3v2"
 NOW = timestamp("2026-10-14T16:00:00.000Z")
@@ -283,3 +283,18 @@ def test_continue_still_capped_at_4096():
     _, shell, detail = load("completed")
     with pytest.raises(ValueError, match="1–4096"):
         build_commands("continue", {}, shell, detail, ALL, text="a" * 4097, now_iso="x")
+
+
+def test_live_file_change_approval_maps_to_default_approve_deny():
+    # Live T3 0.0.46 capture (Claude provider, file-change request, options null).
+    state, shell, detail = load("approval_live")
+    rid = shell["pendingRuntimeRequest"]["id"]
+    assert state.status == Status.BLOCKED
+    assert state.attention == "approval"
+    assert live_request(detail, rid)
+    assert "NOTES.md" in state.preview
+    actions = thread_actions(state, shell, detail, ALL, NOW)
+    assert ids(actions) == ["approve", "deny"]
+    assert [a["payload"] for a in actions] == [
+        {"requestId": rid, "decision": "accept"},
+        {"requestId": rid, "decision": "decline"}]
