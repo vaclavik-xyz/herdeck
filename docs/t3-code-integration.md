@@ -29,7 +29,7 @@ dispatch commands. A credential is a bearer token (no DPoP needed).
 | Descriptor | `GET /.well-known/t3/environment` (no auth) | `orchestrationProtocolVersion` must be exactly 2 (absent means 1); `capabilities` advertise `threadSettlement`, `threadSnooze`, `threadVisitedTracking`, `serverResolvedCommandContext` |
 | Shell | `GET /api/orchestration/shell` | `threads`, `archivedThreads`, `projects`; needs `orchestration:read` |
 | Detail | `GET /api/orchestration/threads/:id/bounded` | prompt of a pending request, plan text, last assistant message; the unbounded `/threads/:id` is used only when the bounded plan text is left in a turn item |
-| Ticket | `POST /api/auth/websocket-ticket` | bearer, no body, 5 minute ticket |
+| Ticket | `POST /api/auth/websocket-ticket` | bearer, no body; the ticket lasted 5 minutes on the server we observed |
 | Dispatch | `ws(s)://host/ws?orchestrationProtocol=2&wsTicket=...` | one `orchestration.dispatchCommand` request, wait for the `Exit`, close; `Ping` is answered with `Pong` |
 
 Facts checked on the live server: shell and detail reads without the
@@ -39,7 +39,7 @@ without `orchestrationProtocol=2` fails with HTTP 426; a dispatch result is
 executing it again; a schema error comes back as `Die`, a refused command as
 `Fail` (`OrchestrationV2DispatchCommandError`); `thread.visit` sets the shared
 `lastVisitedAt`. HTTP errors: 401 invalid or expired credential, 403 missing
-scope (`insufficient_scope`), 404 unknown thread.
+scope (`insufficient_scope` as observed), 404 unknown thread.
 
 Credential scopes: `orchestration:read` (tiles) and `orchestration:operate`
 (actions). Setup and renewal issue both:
@@ -49,9 +49,10 @@ t3 auth session issue --scope orchestration:read --scope orchestration:operate \
   --ttl 30d --label "Herdeck <id>" --json
 ```
 
-A read-only token keeps the tiles live; every tile then says
-`T3 credential lacks orchestration:operate — actions disabled.` and offers no
-controls.
+Scopes are not checked at connect. With a read-only token the tiles stay live
+and show normal controls until the first action is refused for the missing
+scope; from then on actions are disabled for that connection and every tile
+says `T3 credential lacks orchestration:operate — actions disabled.`
 
 ## Status mapping
 
@@ -101,7 +102,7 @@ excepted). Commands are built in `src/herdeck/t3_actions.py`.
 | Implement plan (confirm) | PLAN READY with an active plan | `thread.interaction-mode.set` to `default`, then `message.dispatch` with `PLEASE IMPLEMENT THIS PLAN:` and the plan (up to 120000 characters) |
 | Mark seen | DONE and `threadVisitedTracking` | `thread.visit` with the completion time |
 | Settle / Reopen | `threadSettlement`; Settle on idle, done or failed threads | `thread.settle` / `thread.unsettle` |
-| Snooze 1h / Wake now | `threadSnooze`; not while blocked or queued | `thread.snooze` / `thread.unsnooze` |
+| Snooze 1h / Wake now | `threadSnooze`; not while awaiting approval or input, or while a start is queued | `thread.snooze` / `thread.unsnooze` |
 
 A reply sent while a run is active and the server does not resolve context
 itself is queued after the run (`queue_after_active`).

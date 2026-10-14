@@ -14,8 +14,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   seen" clears it everywhere.
 - T3 actions (approve, deny, answer, stop, reply, implement plan, settle,
   snooze, mark seen) are dispatched over the WebSocket with idempotent
-  retries. A read-only token keeps tiles live and disables actions with a
-  notice.
+  retries. With a read-only token the tiles stay live and the
+  first refused action disables actions for that connection, with a notice on
+  every tile.
 - `herdeck-t3-connect` and renewal issue scoped tokens (`orchestration:read`
   and `orchestration:operate`); renewal finds the CLI of T3 0.0.42+.
 

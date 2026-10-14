@@ -643,8 +643,10 @@ The one-time setup command uses T3's own CLI to issue a credential; it does not
 read or copy Codex/Claude credentials. The token is scoped to what Herdeck
 uses (equivalent to `t3 auth session issue --scope orchestration:read --scope
 orchestration:operate --ttl 30d --label "Herdeck <id>" --json`), and still
-belongs only in the OS keychain. A read-only token keeps tiles live but
-disables actions with a notice on each tile.
+belongs only in the OS keychain. Scopes are not checked at
+connect: with a read-only token the tiles stay live with normal controls until
+the first action is refused, then actions are disabled for that connection and
+every tile shows a notice.
 
 Two topologies work: a T3 desktop app or server on the same Mac (discovered
 automatically, below), or a remote headless server reached through an SSH
@@ -709,6 +711,7 @@ offered only for live requests, and questions only when there is a single
 single-choice question; everything else is displayed and answered in T3
 ("Answer in T3"). Single-choice questions use the provider's exact option
 value. Persistent approvals use exact provider options and require two presses.
+"Approve always" additionally requires the `safety.approve_always` setting.
 Raw keys, terminal streaming and desktop thread navigation are not supported.
 Delivery is idempotent: a failed send is retried once with the same command id,
 and if the outcome stays unknown the tile is read-only until the thread
@@ -791,7 +794,8 @@ and verify the destination's actual loopback port first. A user LaunchAgent
 
 Its plist uses RunAtLoad, KeepAlive and ThrottleInterval=10. Bind only loopback;
 reuse existing SSH keys and tailnet membership. `t3-headless` points to this
-stable local port (`http://127.0.0.1:13773`); its ID and token_env remain unchanged. Preserve a config backup
+stable local port (`http://127.0.0.1:13773`); its ID and token_env remain
+unchanged. Preserve a config backup
 before changing the URL. This is an application transport, not a new public route.
 
 `com.herdeck.t3-renew` runs every hour (StartInterval=3600, RunAtLoad=true) in the
@@ -853,5 +857,6 @@ structured T3 question choices remain available through the native deck controls
 Elgato overview excludes inactive T3 lifecycle states. Its fixed Approve, Deny,
 and Stop keys follow advertised capabilities, without terminal prompt inference.
 Setup, renewal, doctor, and the runtime all require both shell `threads` and
-`projects` arrays and a protocol-2 descriptor before accepting a T3 connection. Explicit HTTP client rejection
+`projects` arrays and a protocol-2 descriptor before accepting a T3
+connection. Explicit HTTP client rejection
 releases the dispatch guard; timeouts and ambiguous server failures remain guarded.
