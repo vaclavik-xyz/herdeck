@@ -73,7 +73,7 @@ def test_cli_path_falls_back_to_node_bundle(tmp_path):
 
 
 def test_cli_path_rejects_bad_version_and_missing_runtime(tmp_path):
-    for bad in ("../evil", "1.2", "1.2.3-", "1.2.3/x"):
+    for bad in ("../evil", "1.2", "1.2.3-", "1.2.3/x", "1.2.3-a..b", "01.2.3", "1.2.3-01", "1.2.3+"):
         with pytest.raises(ValueError, match="Invalid runtime version"):
             t3_renew._cli_path(tmp_path, bad)
     with pytest.raises(ValueError, match="not found"):
@@ -83,7 +83,7 @@ def test_cli_path_rejects_bad_version_and_missing_runtime(tmp_path):
 def test_remote_script_compiles_and_matches_selection_and_scopes():
     compile(t3_renew._REMOTE, "<remote>", "exec")
     assert "orchestration:read" in t3_renew._REMOTE and "orchestration:operate" in t3_renew._REMOTE
-    assert "(-[0-9A-Za-z.]+)?" in t3_renew._REMOTE and '"t3"' in t3_renew._REMOTE
+    assert t3_renew._VERSION in t3_renew._REMOTE and '"t3"' in t3_renew._REMOTE
 
 
 def test_local_issue_uses_runtime_cli_and_scopes(tmp_path, monkeypatch):
@@ -98,3 +98,9 @@ def test_local_issue_uses_runtime_cli_and_scopes(tmp_path, monkeypatch):
     cmd = seen[0]
     assert cmd[0].endswith(f"{v}/t3")
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--scope"] == ["orchestration:read", "orchestration:operate"]
+
+
+@pytest.mark.parametrize("v", ["0.0.46-nightly-2026", "0.0.46-preview.20261010.2909+build.1", "1.0.0"])
+def test_cli_path_accepts_upstream_version_strings(tmp_path, v):
+    _fake(tmp_path, v, exe=True)
+    assert t3_renew._cli_path(tmp_path, v)[0].endswith("/t3")

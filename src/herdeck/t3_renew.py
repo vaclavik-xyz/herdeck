@@ -19,7 +19,8 @@ from .t3_client import T3Client, T3Error, T3Http
 from .t3_state import timestamp
 
 SCOPES = ("--scope", "orchestration:read", "--scope", "orchestration:operate")
-_VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?"
+# Mirrors upstream EXACT_SERVICE_VERSION (serviceProtocol.ts): exact SemVer only.
+_VERSION = r"(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:[.](?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:[+][0-9A-Za-z-]+(?:[.][0-9A-Za-z-]+)*)?"
 
 # Read the installed boot-service version instead of downloading a moving npm tag.
 # Runs remotely via `python3 -c`, so it is self-contained; keep the CLI selection
@@ -28,7 +29,7 @@ _REMOTE = '''import json, pathlib, re, shutil, subprocess, sys
 p = json.loads(sys.stdin.readline())
 base = pathlib.Path.home() / ".t3"
 version = json.loads((base / "runtime/service-state.json").read_text())["activeVersion"]
-if not re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?", version): raise ValueError("Invalid runtime version")
+if not re.fullmatch(r"(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:[.](?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:[+][0-9A-Za-z-]+(?:[.][0-9A-Za-z-]+)*)?", version): raise ValueError("Invalid runtime version")
 vdir = base / "runtime/versions" / version
 exe = vdir / "t3"
 legacy = vdir / "node_modules/t3/dist/bin.mjs"
