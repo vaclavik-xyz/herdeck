@@ -632,12 +632,24 @@ Never include token values or the sidecar loopback access token.
 
 ## T3 Code setup
 
-Prerequisite: an existing running T3 server and its local CLI executable. Tested
-with npm `t3` version `0.0.31`. The desktop Herdeck runtime includes its Python
-HTTP adapter and needs neither Node nor a provider CLI to connect to T3.
+Prerequisite: a running T3 server of version **0.0.46 or newer** (orchestration
+protocol 2) and its local CLI executable. Until 0.0.46 reaches the stable
+channel this is the preview/nightly build: `npm i -g t3@preview`, or the T3
+desktop app on its preview channel. Older servers (stable 0.0.45 and below)
+show as incompatible: `T3 server speaks orchestration protocol 1; Herdeck needs
+2 (T3 0.0.46+)`. The desktop Herdeck runtime includes its Python HTTP adapter
+and needs neither Node nor a provider CLI to connect to T3.
 The one-time setup command uses T3's own CLI to issue a credential; it does not
-read or copy Codex/Claude credentials. T3's CLI currently issues administrative
-scopes, so this credential belongs only in the OS keychain.
+read or copy Codex/Claude credentials. The token is scoped to what Herdeck
+uses (equivalent to `t3 auth session issue --scope orchestration:read --scope
+orchestration:operate --ttl 30d --label "Herdeck <id>" --json`), and still
+belongs only in the OS keychain. A read-only token keeps tiles live but
+disables actions with a notice on each tile.
+
+Two topologies work: a T3 desktop app or server on the same Mac (discovered
+automatically, below), or a remote headless server reached through an SSH
+tunnel (see the transport section below; pass `--url` with the tunnel's local
+URL). Details: [the T3 contract](t3-code-integration.md).
 
 After the inventory and backups described above, run from this source checkout
 or an environment with the updated Herdeck CLI installed:
@@ -653,7 +665,8 @@ HTTP. `--url` may override discovery with an HTTP loopback/Tailscale origin or
 an HTTPS origin. No listener, proxy, tunnel or Tailscale rule is created.
 
 The command refuses duplicate IDs and existing credential names. It issues a
-30-day session into memory, verifies a shell snapshot, stores the token in the
+30-day scoped session into memory, verifies the protocol-2 descriptor and a
+shell snapshot, stores the token in the
 `herdeck` keychain namespace, backs up existing files, and writes a connection:
 
 ```toml
@@ -691,13 +704,17 @@ and preserves T3 history and Herdr settings. Verify the remaining runtime
 connections. Restore the backup to roll back removal. Revoke the retained T3
 session and remove its keychain entry only after rollback is no longer needed.
 
-For T3, the deck offers only supported semantic actions. Free-text/multiple
-questions and multi-select forms are displayed but answered in T3. Single-choice
-questions use the provider's exact option value. Persistent approvals use exact provider options and require two presses. Always
-grants additionally require the safety setting. Raw keys, terminal streaming
-and desktop thread navigation are not supported. An uncertain
-write is not retried; actions remain disabled until its exact effect is observed
-in T3 or the operator investigates and deliberately recreates the connection.
+For T3, the deck offers only supported semantic actions. Approval answers are
+offered only for live requests, and questions only when there is a single
+single-choice question; everything else is displayed and answered in T3
+("Answer in T3"). Single-choice questions use the provider's exact option
+value. Persistent approvals use exact provider options and require two presses.
+Raw keys, terminal streaming and desktop thread navigation are not supported.
+Delivery is idempotent: a failed send is retried once with the same command id,
+and if the outcome stays unknown the tile is read-only until the thread
+changes (an identical press then safely resends the same command). The deck
+currently reports T3 rejected or uncertain results as "sent"; this is a known
+follow-up.
 
 ### Physical D200 compatibility and T3 tile labels
 
@@ -769,12 +786,12 @@ and verify the destination's actual loopback port first. A user LaunchAgent
 ```sh
 /usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
-  -L 127.0.0.1:13773:127.0.0.1:3773 admin@100.86.178.12
+  -L 127.0.0.1:13773:127.0.0.1:3773 <user>@<t3-host>
 ```
 
 Its plist uses RunAtLoad, KeepAlive and ThrottleInterval=10. Bind only loopback;
 reuse existing SSH keys and tailnet membership. `t3-headless` points to this
-stable local port; its ID and token_env remain unchanged. Preserve a config backup
+stable local port (`http://127.0.0.1:13773`); its ID and token_env remain unchanged. Preserve a config backup
 before changing the URL. This is an application transport, not a new public route.
 
 `com.herdeck.t3-renew` runs every hour (StartInterval=3600, RunAtLoad=true) in the
@@ -782,7 +799,7 @@ same GUI user domain and with the same Python interpreter as the runtime:
 
 ```sh
 python -m herdeck.t3_setup --id t3-headless --renew \
-  --issuer-ssh admin@100.86.178.12 --restart-label com.herdeck.app
+  --issuer-ssh <user>@<t3-host> --restart-label com.herdeck.app
 ```
 
 `com.herdeck.app` is that host's hand-made runtime label. A runtime installed
@@ -795,7 +812,10 @@ and session expiry, issues a new 30-day credential only within seven days of
 expiry (or after expiry), validates it against the configured server, then stores
 it under the same Keychain account and restarts the runtime to adopt it. An
 environment credential override is refused rather than silently superseded.
-The issuer uses its installed boot-service version, not a moving npm download.
+The issuer uses its installed boot-service version, not a moving npm download;
+it finds the CLI of T3 0.0.42+ (`runtime/versions/<version>/t3`, prerelease
+versions included) and falls back to the older Node layout. Renewed tokens are
+scoped like the original (`orchestration:read` + `orchestration:operate`).
 A failed validation preserves the old credential and revokes the newly issued
 one. The previous credential expires naturally to retain a rollback window.
 The setup command never prints tokens or puts them in subprocess arguments.
@@ -810,44 +830,15 @@ a new source release; keep the runtime helper and renewal agent on the same sour
 Settled, snoozed, archived and deleted threads are excluded from active overview
 and counts. An existing deck pin still shows the known lifecycle rather than a
 misleading Done/offline tile. T3 pinning remains independent of deck position.
-**Mark seen** acknowledges one completion locally; it does not mark it read on a
-phone. **Implement plan** uses its proposal identity and exits plan mode.
-**Stop session** is a separate confirmed control for background provider work.
-Settle/reopen and one-hour snooze/wake controls depend on advertised server support.
-Unknown API version families are read-only and explain why in the preview.
+Done and seen are shared through the T3 server's `lastVisitedAt`: opening the
+thread in T3 desktop or mobile clears Done on the deck, and **Mark seen** on the
+deck (`thread.visit`) clears it everywhere. A completed thread that was never
+opened is not shown as Done, as in T3. **Implement plan** uses its proposal
+identity and exits plan mode. Settle/reopen and one-hour snooze/wake controls
+depend on advertised server support. `desktop_read_state` /
+`HERDECK_T3_DESKTOP_READ_STATE` are obsolete: still accepted, ignored, and
+logged once. An unsupported protocol version is offline with an explanation.
 
-
-### Temporary local T3 desktop read-state sync (MacBench)
-
-Until upstream PR #9124 ships shared viewedAt state, the MacBench runtime helper
-sets `HERDECK_T3_DESKTOP_READ_STATE=1` (the config equivalent is
-`desktop_read_state = true` on that T3 `[[servers]]` entry). This reads the same machine's T3 0.0.38
-Electron UI state (`t3code:ui-state:v1`, origin `t3code://app`) and compares the
-scoped environment/thread visit timestamp to the latest completion. Opening a
-completed thread in that T3 desktop clears the deck's Done. New unread completions
-and desktop Mark unread remain Done. Never-visited history matches the desktop's
-existing rule: it is not treated as unread. No timeout is enabled.
-
-Install the native LevelDB library (`brew install leveldb`) on the opted-in host.
-The reader uses its stable C API through ctypes. It opens only a private temporary
-copy; it never opens, locks, repairs or writes the live T3 database. CURRENT and
-manifest/SST/WAL files resolve the current record, including compaction and
-deletions. Before/after file signatures reject snapshots taken during a write;
-unchanged files reuse the decoded visit map. Only the expected UI key is read,
-and only visit timestamps leave the reader. Snapshot files are removed after use.
-The copy is limited to 64 MiB and the UI record to 8 MiB. A missing, unsupported,
-or unreadable store falls back to the existing deck behavior and reports the
-condition in the thread preview; it does not silently clear Done.
-
-`HERDECK_T3_DESKTOP_STORAGE` can override the default
-`~/Library/Application Support/t3code/Local Storage/leveldb` directory.
-`HERDECK_LEVELDB_LIBRARY` can select the library; default locations cover Apple
-Silicon/Intel Homebrew and the system library search. Neither contains secrets.
-While desktop read sync is healthy, the competing local Mark seen action is
-hidden. Existing manual acknowledgments remain available as fallback when the
-reader is unavailable. This is local to MacBench: visits on a phone or another
-computer are not observed. It does not modify T3, require a fork, or send read
-commands to the server. Remove the opt-in when shared read state is integrated.
 
 ### T3 targets in the semantic API
 
@@ -862,5 +853,5 @@ structured T3 question choices remain available through the native deck controls
 Elgato overview excludes inactive T3 lifecycle states. Its fixed Approve, Deny,
 and Stop keys follow advertised capabilities, without terminal prompt inference.
 Setup, renewal, doctor, and the runtime all require both shell `threads` and
-`projects` arrays before accepting a T3 connection. Explicit HTTP client rejection
+`projects` arrays and a protocol-2 descriptor before accepting a T3 connection. Explicit HTTP client rejection
 releases the dispatch guard; timeouts and ambiguous server failures remain guarded.
