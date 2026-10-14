@@ -29,8 +29,8 @@ from .t3_actions import Incompatible, build_commands, capabilities, negotiate, t
 from .t3_client import T3Client, T3Error, T3Http, T3Rejected
 from .t3_state import active_plan, lifecycle, thread_state
 
-# T3Error/T3Http are re-exported for t3_setup/doctor/t3_renew.
-__all__ = ["T3Connector", "T3Error", "T3Http", "T3Rejected", "validate_shell"]
+# T3Error/T3Http are re-exported for settings.py.
+__all__ = ["T3Connector", "T3Error", "T3Http", "T3Rejected"]
 
 log = logging.getLogger("herdeck.t3")
 

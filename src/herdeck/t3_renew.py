@@ -7,29 +7,67 @@ it can access the same Keychain as the Herdeck runtime.
 import json
 import os
 import re
+import shutil
 import subprocess
 import tomllib
 from datetime import UTC, datetime
+from pathlib import Path
 
 from .secrets import peek_keychain, set_secret
-from .t3 import T3Error, T3Http, validate_shell
+from .t3_actions import negotiate
+from .t3_client import T3Client, T3Error, T3Http
 from .t3_state import timestamp
 
+SCOPES = ("--scope", "orchestration:read", "--scope", "orchestration:operate")
+_VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?"
+
 # Read the installed boot-service version instead of downloading a moving npm tag.
+# Runs remotely via `python3 -c`, so it is self-contained; keep the CLI selection
+# in step with _cli_path below (T3 0.0.42+ ships a standalone runtime/versions/<v>/t3).
 _REMOTE = '''import json, pathlib, re, shutil, subprocess, sys
 p = json.loads(sys.stdin.readline())
 base = pathlib.Path.home() / ".t3"
 version = json.loads((base / "runtime/service-state.json").read_text())["activeVersion"]
-if not re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+", version): raise ValueError("Invalid runtime version")
-cli = base / "runtime/versions" / version / "node_modules/t3/dist/bin.mjs"
-node = "/opt/homebrew/bin/node" if pathlib.Path("/opt/homebrew/bin/node").exists() else shutil.which("node")
-args = [node, str(cli), "auth", "session", p["operation"]]
-if p["operation"] == "issue": args += ["--json", "--ttl", "30d", "--label", p["label"]]
+if not re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?", version): raise ValueError("Invalid runtime version")
+vdir = base / "runtime/versions" / version
+exe = vdir / "t3"
+legacy = vdir / "node_modules/t3/dist/bin.mjs"
+if exe.is_file():
+    cli = [str(exe)]
+elif legacy.is_file():
+    node = "/opt/homebrew/bin/node" if pathlib.Path("/opt/homebrew/bin/node").exists() else shutil.which("node")
+    cli = [node, str(legacy)]
+else: raise ValueError("T3 runtime CLI not found")
+args = cli + ["auth", "session", p["operation"]]
+if p["operation"] == "issue": args += ["--json", "--scope", "orchestration:read", "--scope", "orchestration:operate", "--ttl", "30d", "--label", p["label"]]
 else: args += [p["sessionId"]]
 args += ["--base-dir", str(base)]
 result = subprocess.run(args, capture_output=True, text=True, timeout=30, check=True)
 if p["operation"] == "issue": print(result.stdout, end="")
 '''
+
+
+def _cli_path(base: Path, version: str) -> list[str]:
+    """argv prefix of the T3 CLI installed under ``base`` for ``version``."""
+    if not re.fullmatch(_VERSION, version):
+        raise ValueError("Invalid runtime version")
+    vdir = base / "runtime/versions" / version
+    exe = vdir / "t3"
+    if exe.is_file():
+        return [str(exe)]
+    legacy = vdir / "node_modules/t3/dist/bin.mjs"
+    if legacy.is_file():
+        node = "/opt/homebrew/bin/node" if Path("/opt/homebrew/bin/node").exists() else shutil.which("node")
+        if node:
+            return [node, str(legacy)]
+    raise ValueError("T3 runtime CLI not found")
+
+
+def _local_cli(args) -> list[str]:
+    state = Path(args.base_dir) / "runtime/service-state.json"
+    if state.is_file():
+        return _cli_path(Path(args.base_dir), json.loads(state.read_text())["activeVersion"])
+    return [args.binary]
 
 
 def issuer(args, operation, session_id=None):
@@ -44,8 +82,8 @@ def issuer(args, operation, session_id=None):
             label="Herdeck " + args.id, sessionId=session_id)) + "\n",
             capture_output=True, text=True, timeout=45, check=True)
         return json.loads(result.stdout) if operation == "issue" else None
-    command = [args.binary, "auth", "session", operation]
-    command += (["--json", "--ttl", "30d", "--label", "Herdeck " + args.id]
+    command = [*_local_cli(args), "auth", "session", operation]
+    command += (["--json", *SCOPES, "--ttl", "30d", "--label", "Herdeck " + args.id]
                 if operation == "issue" else [session_id])
     command += ["--base-dir", str(args.base_dir)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
@@ -83,8 +121,9 @@ def renew(args):
     issued = issuer(args, "issue")
     stored = False
     try:
-        snapshot = T3Http(server["url"], issued["token"]).get("/api/orchestration/shell")
-        validate_shell(snapshot)
+        client = T3Client(server["url"], issued["token"])
+        negotiate(client.descriptor())
+        client.shell()
         if args.config.read_text() != original:
             raise ValueError("Configuration changed concurrently")
         if peek_keychain(env) != old:

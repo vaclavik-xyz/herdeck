@@ -20,7 +20,8 @@ import tomli_w
 
 from .secrets import clear_secret, get_secret, peek_keychain, set_secret
 from .settings import SettingsSnapshot, _merged_sections, resolve_profile
-from .t3 import T3Http, validate_shell
+from .t3_actions import Incompatible, negotiate
+from .t3_client import T3Client, T3Http
 
 
 def discover(base_dir: Path) -> str:
@@ -95,14 +96,19 @@ def connect(args):
             shutil.copy2(p, backup)
             backups.append(str(backup))
     issued = json.loads(subprocess.check_output([args.binary, "auth", "session", "issue",
-        "--base-dir", str(args.base_dir), "--json", "--ttl", "30d", "--label", "Herdeck " + args.id],
+        "--base-dir", str(args.base_dir), "--json",
+        "--scope", "orchestration:read", "--scope", "orchestration:operate", "--ttl", "30d", "--label", "Herdeck " + args.id],
         text=True, stderr=subprocess.DEVNULL, timeout=30))
     token = issued["token"]
     written = {}
     stored = False
     try:
-        snapshot = T3Http(url, token).get("/api/orchestration/shell")
-        validate_shell(snapshot)
+        client = T3Client(url, token)
+        try:
+            negotiate(client.descriptor())
+        except Incompatible as exc:
+            raise ValueError(str(exc)) from None
+        snapshot = client.shell()
         set_secret(env, token)
         stored = True
         resolved = resolve_profile(SettingsSnapshot(path, local_path, proposed, local, os.environ.get("HERDECK_PROFILE")))

@@ -21,6 +21,8 @@ def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatc
         return dict(token="new-private", sessionId="new-id", expiresAt="2026-10-06T12:00:00Z")
     monkeypatch.setattr(t3_renew, "issuer", issue)
     def get(http, route):
+        if route.endswith("environment"):
+            return {"orchestrationProtocolVersion": 2, "capabilities": {}}
         if route.endswith("/session"):
             return dict(expiresAt="2099-01-01T00:00:00Z" if case == "fresh" else "2020-01-01T00:00:00Z")
         if case == "verify_failure":
@@ -46,3 +48,53 @@ def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatc
         assert json.loads(output)["renewed"] == (case == "renew")
         assert secret["value"] == ("new-private" if case == "renew" else "old-private")
     assert path.read_text() == original
+
+
+def _fake(tmp_path, version, exe=False, legacy=False):
+    vdir = tmp_path / "runtime/versions" / version
+    vdir.mkdir(parents=True)
+    if exe:
+        (vdir / "t3").write_text("#!/bin/sh\n")
+    if legacy:
+        (vdir / "node_modules/t3/dist").mkdir(parents=True)
+        (vdir / "node_modules/t3/dist/bin.mjs").write_text("")
+
+
+def test_cli_path_prefers_standalone_executable_for_prerelease(tmp_path):
+    v = "0.0.46-preview.20261010.2909"
+    _fake(tmp_path, v, exe=True, legacy=True)
+    assert t3_renew._cli_path(tmp_path, v) == [str(tmp_path / "runtime/versions" / v / "t3")]
+
+
+def test_cli_path_falls_back_to_node_bundle(tmp_path):
+    _fake(tmp_path, "0.0.41", legacy=True)
+    cli = t3_renew._cli_path(tmp_path, "0.0.41")
+    assert cli[1].endswith("node_modules/t3/dist/bin.mjs") and len(cli) == 2
+
+
+def test_cli_path_rejects_bad_version_and_missing_runtime(tmp_path):
+    for bad in ("../evil", "1.2", "1.2.3-", "1.2.3/x"):
+        with pytest.raises(ValueError, match="Invalid runtime version"):
+            t3_renew._cli_path(tmp_path, bad)
+    with pytest.raises(ValueError, match="not found"):
+        t3_renew._cli_path(tmp_path, "0.0.46")
+
+
+def test_remote_script_compiles_and_matches_selection_and_scopes():
+    compile(t3_renew._REMOTE, "<remote>", "exec")
+    assert "orchestration:read" in t3_renew._REMOTE and "orchestration:operate" in t3_renew._REMOTE
+    assert "(-[0-9A-Za-z.]+)?" in t3_renew._REMOTE and '"t3"' in t3_renew._REMOTE
+
+
+def test_local_issue_uses_runtime_cli_and_scopes(tmp_path, monkeypatch):
+    v = "0.0.46-preview.20261010.2909"
+    _fake(tmp_path, v, exe=True)
+    (tmp_path / "runtime/service-state.json").write_text(json.dumps({"activeVersion": v}))
+    seen = []
+    class R:
+        stdout = "{}"
+    monkeypatch.setattr(t3_renew.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or R())
+    t3_renew.issuer(argparse.Namespace(base_dir=tmp_path, binary="t3", id="x", issuer_ssh=None), "issue")
+    cmd = seen[0]
+    assert cmd[0].endswith(f"{v}/t3")
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--scope"] == ["orchestration:read", "orchestration:operate"]

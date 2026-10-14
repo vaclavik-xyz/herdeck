@@ -89,6 +89,25 @@ def check_config(
     )
 
 
+def _t3_probe(url, token):
+    """None when the T3 server speaks protocol 2 and accepts the credential."""
+    from .t3_actions import Incompatible, negotiate
+    from .t3_client import T3Client, T3Error
+    client = T3Client(url, token)
+    try:
+        negotiate(client.descriptor())
+        client.shell()
+    except Incompatible as exc:
+        return str(exc)
+    except T3Error as exc:
+        if exc.code == 401:
+            return "credential invalid or expired"
+        if exc.code == 403:
+            return "credential lacks orchestration:read"
+        raise
+    return None
+
+
 def check_servers(servers, probe) -> list[Check]:
     """One connectivity check per configured [[servers]] entry.
 
@@ -100,10 +119,7 @@ def check_servers(servers, probe) -> list[Check]:
     for server in servers:
         try:
             if server.backend == "t3":
-                from .t3 import T3Http, validate_shell
-                snapshot = T3Http(server.url, server.token).get("/api/orchestration/shell")
-                validate_shell(snapshot)
-                result = None
+                result = _t3_probe(server.url, server.token)
             else:
                 result = probe(server.url, server.token)
         except Exception as exc:
