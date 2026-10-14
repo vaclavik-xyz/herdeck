@@ -16,6 +16,9 @@ DECISIONS = ("accept", "acceptForSession", "acceptAlways", "decline", "cancel")
 APPROVE_IDS = {"accept": "approve", "acceptForSession": "approve_session",
                "acceptAlways": "approve_always"}
 MESSAGE_ERROR = "T3 message must contain 1–4096 characters"
+PLAN_ERROR = "T3 plan is too long to implement from the deck"
+# Upstream PROVIDER_SEND_TURN_MAX_INPUT_CHARS (chatAttachment.ts); bounds the plan message.
+PLAN_MAX_CHARS = 120_000
 
 
 class Incompatible(Exception):
@@ -95,9 +98,9 @@ def capabilities(state, shell, actions):
     return tuple(dict.fromkeys(caps))
 
 
-def _message(tid, text, features, shell):
-    if not isinstance(text, str) or not 1 <= len(text) <= 4096 or not text.strip():
-        raise ValueError(MESSAGE_ERROR)
+def _message(tid, text, features, shell, *, limit=4096, error=MESSAGE_ERROR):
+    if not isinstance(text, str) or not 1 <= len(text) <= limit or not text.strip():
+        raise ValueError(error)
     msg = {"type": "message.dispatch", "threadId": tid, "messageId": str(uuid.uuid4()),
            "createdBy": "user", "creationSource": "web", "text": text, "attachments": [],
            "dispatchMode": {"type": "start_immediately"}, "deliveryIntent": "auto"}
@@ -123,7 +126,8 @@ def build_commands(action, payload, shell, detail, features, *, text=None, now_i
         plan = active_plan(detail)
         if not plan or plan["id"] != payload["planId"]:
             raise ValueError("T3 plan is no longer active")
-        message = _message(tid, "PLEASE IMPLEMENT THIS PLAN:\n" + plan["markdown"].strip(), features, shell)
+        message = _message(tid, "PLEASE IMPLEMENT THIS PLAN:\n" + plan["markdown"].strip(), features, shell,
+                           limit=PLAN_MAX_CHARS, error=PLAN_ERROR)
         message["sourcePlanRef"] = {"threadId": tid, "planId": plan["id"]}
         return [{"type": "thread.interaction-mode.set", "threadId": tid, "interactionMode": "default"}, message]
     if action == "acknowledge":

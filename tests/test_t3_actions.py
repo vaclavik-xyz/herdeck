@@ -261,3 +261,25 @@ def test_unknown_action_raises():
     _, shell, detail = load("plan")
     with pytest.raises(ValueError):
         build_commands("nope", {}, shell, detail, ALL, now_iso="x")
+
+
+def _plan_with(markdown):
+    shell = dict(fx("shell_plan")["threads"][0], status="completed")
+    detail = fx("detail_plan")["projection"]
+    detail["plans"][-1]["markdown"] = markdown
+    return shell, detail, active_plan(detail)["id"]
+
+
+def test_long_plan_builds_and_oversized_plan_rejected():
+    shell, detail, pid = _plan_with("x" * 10_000)
+    cmds = build_commands("implement_plan", {"planId": pid}, shell, detail, ALL, now_iso="x")
+    assert len(cmds[1]["text"]) > 4096
+    shell, detail, pid = _plan_with("x" * 130_000)
+    with pytest.raises(ValueError, match="T3 plan is too long to implement from the deck"):
+        build_commands("implement_plan", {"planId": pid}, shell, detail, ALL, now_iso="x")
+
+
+def test_continue_still_capped_at_4096():
+    _, shell, detail = load("completed")
+    with pytest.raises(ValueError, match="1–4096"):
+        build_commands("continue", {}, shell, detail, ALL, text="a" * 4097, now_iso="x")
