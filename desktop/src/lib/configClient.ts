@@ -324,17 +324,6 @@ export function updateServer(
   return withServers(payload, servers);
 }
 
-/** NEW payload with server `index`'s T3 `desktop_read_state` set (false drops
- *  the key: it is the backend default and only valid on T3 servers). */
-export function setServerReadState(payload: ConfigPayload, index: number, value: boolean): ConfigPayload {
-  const servers = serversOf(payload).map((s, i) => {
-    if (i !== index) return s;
-    const { desktop_read_state: _drop, ...rest } = s;
-    return value ? { ...rest, desktop_read_state: true } : rest;
-  });
-  return withServers(payload, servers);
-}
-
 /** Select or deselect one discovered local Herdr session in local.toml. */
 export function setLocalSessionSelected(
   payload: ConfigPayload,

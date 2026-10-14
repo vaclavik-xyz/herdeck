@@ -2,7 +2,6 @@
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import { invoke } from "@tauri-apps/api/core";
   import TextField from "../fields/TextField.svelte";
-  import BooleanField from "../fields/BooleanField.svelte";
   import TokenSecretField from "../fields/TokenSecretField.svelte";
   import ConfirmRemoveButton from "../fields/ConfirmRemoveButton.svelte";
   import {
@@ -11,7 +10,6 @@
     addServer,
     removeServer,
     updateServer,
-    setServerReadState,
     setLocalSessionSelected,
     secretFlag,
     type ConfigPayload,
@@ -63,10 +61,6 @@
 
   function set(i: number, field: "id" | "url" | "token_env" | "token_file", v: string): void {
     payload = updateServer(payload, i, field, v);
-    onChange();
-  }
-  function setReadState(i: number, v: boolean): void {
-    payload = setServerReadState(payload, i, v);
     onChange();
   }
   function add(): void {
@@ -149,9 +143,6 @@
       onclear={() => clearSecret(s.token_env)}
     />
     <TextField label="token_file" help={HELP.token_file} owner={s.id} value={s.token_file ?? ""} oninput={(v) => set(i, "token_file", v)} />
-    {#if s.backend === "t3"}
-      <BooleanField label="desktop_read_state" help={HELP.desktop_read_state} value={s.desktop_read_state === true} onchange={(v) => setReadState(i, v)} />
-    {/if}
   </fieldset>
 {/each}
 <button type="button" onclick={add}>{lm.add_server}</button>
