@@ -65,10 +65,14 @@ def _cli_path(base: Path, version: str) -> list[str]:
 
 
 def _local_cli(args) -> list[str]:
+    """Resolve the T3 CLI: explicit --binary, else the runtime CLI, else ``t3`` on PATH."""
+    explicit = getattr(args, "binary", None)
+    if explicit:
+        return [explicit]
     state = Path(args.base_dir) / "runtime/service-state.json"
     if state.is_file():
         return _cli_path(Path(args.base_dir), json.loads(state.read_text())["activeVersion"])
-    return [args.binary]
+    return ["t3"]
 
 
 def issuer(args, operation, session_id=None):

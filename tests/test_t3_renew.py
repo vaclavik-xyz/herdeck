@@ -94,7 +94,7 @@ def test_local_issue_uses_runtime_cli_and_scopes(tmp_path, monkeypatch):
     class R:
         stdout = "{}"
     monkeypatch.setattr(t3_renew.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or R())
-    t3_renew.issuer(argparse.Namespace(base_dir=tmp_path, binary="t3", id="x", issuer_ssh=None), "issue")
+    t3_renew.issuer(argparse.Namespace(base_dir=tmp_path, binary=None, id="x", issuer_ssh=None), "issue")
     cmd = seen[0]
     assert cmd[0].endswith(f"{v}/t3")
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--scope"] == ["orchestration:read", "orchestration:operate"]
@@ -104,3 +104,22 @@ def test_local_issue_uses_runtime_cli_and_scopes(tmp_path, monkeypatch):
 def test_cli_path_accepts_upstream_version_strings(tmp_path, v):
     _fake(tmp_path, v, exe=True)
     assert t3_renew._cli_path(tmp_path, v)[0].endswith("/t3")
+
+
+def _issue_cmd(monkeypatch, tmp_path, binary):
+    seen = []
+    class R:
+        stdout = "{}"
+    monkeypatch.setattr(t3_renew.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or R())
+    t3_renew.issuer(argparse.Namespace(base_dir=tmp_path, binary=binary, id="x", issuer_ssh=None), "issue")
+    return seen[0]
+
+
+def test_explicit_binary_wins_over_runtime_cli_in_renewal(tmp_path, monkeypatch):
+    _fake(tmp_path, "0.0.46", exe=True)
+    (tmp_path / "runtime/service-state.json").write_text(json.dumps({"activeVersion": "0.0.46"}))
+    assert _issue_cmd(monkeypatch, tmp_path, "/opt/my/t3")[0] == "/opt/my/t3"
+
+
+def test_renewal_falls_back_to_path_t3_without_runtime(tmp_path, monkeypatch):
+    assert _issue_cmd(monkeypatch, tmp_path, None)[0] == "t3"

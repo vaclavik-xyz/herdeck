@@ -661,6 +661,8 @@ herdeck-t3-connect --id t3-local --binary /absolute/path/to/t3
 ```
 
 Use `python -m herdeck.t3_setup` if the console entry point is not installed.
+`--binary` is optional: when given it is always used (setup and renewal); otherwise the
+runtime CLI from `<base-dir>/runtime/service-state.json` is used, then `t3` on PATH.
 `--base-dir` defaults to `~/.t3`. Discovery reads only
 `userdata/server-runtime.json`, then verifies the server using authenticated
 HTTP. `--url` may override discovery with an HTTP loopback/Tailscale origin or

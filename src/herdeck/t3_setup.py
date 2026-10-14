@@ -95,11 +95,19 @@ def connect(args):
             backup = p.with_name(p.name + "." + stamp + ".bak")
             shutil.copy2(p, backup)
             backups.append(str(backup))
-    issued = json.loads(subprocess.check_output([args.binary, "auth", "session", "issue",
-        "--base-dir", str(args.base_dir), "--json",
-        "--scope", "orchestration:read", "--scope", "orchestration:operate", "--ttl", "30d", "--label", "Herdeck " + args.id],
-        text=True, stderr=subprocess.DEVNULL, timeout=30))
-    token = issued["token"]
+    from .t3_renew import _local_cli
+    cli = _local_cli(args)
+    try:
+        issued = json.loads(subprocess.check_output([*cli, "auth", "session", "issue",
+            "--base-dir", str(args.base_dir), "--json",
+            "--scope", "orchestration:read", "--scope", "orchestration:operate", "--ttl", "30d", "--label", "Herdeck " + args.id],
+            text=True, stderr=subprocess.DEVNULL, timeout=30))
+        token = issued["token"]
+        issued["sessionId"]
+    except Exception:
+        # Never include command output: it may contain a token.
+        raise ValueError(f"Could not issue a scoped T3 session with {' '.join(cli)}; "
+                         "T3 0.0.46+ is required for scoped tokens (pass --binary to choose the CLI)") from None
     written = {}
     stored = False
     try:
@@ -130,7 +138,7 @@ def connect(args):
                     atomic_write(p, originals[p])
         if stored:
             clear_secret(env)
-        subprocess.run([args.binary, "auth", "session", "revoke", issued["sessionId"],
+        subprocess.run([*cli, "auth", "session", "revoke", issued["sessionId"],
             "--base-dir", str(args.base_dir)], stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, timeout=30, check=False)
         raise
@@ -143,7 +151,7 @@ def main():
     p = argparse.ArgumentParser(description="Connect an existing local T3 server to Herdeck")
     p.add_argument("--config", type=Path, default=Path(os.environ.get("HERDECK_CONFIG", str(Path.home() / ".config/herdeck/config.toml"))))
     p.add_argument("--base-dir", type=Path, default=Path.home() / ".t3")
-    p.add_argument("--binary", default="t3", help="Path to the T3 CLI executable")
+    p.add_argument("--binary", default=None, help="Path to the T3 CLI executable (default: the runtime CLI under --base-dir, else t3 on PATH)")
     p.add_argument("--url", help="Override discovered T3 HTTP origin")
     p.add_argument("--id", default="t3-local")
     p.add_argument("--disconnect", action="store_true", help="Remove the connection; retain its credential for rollback")

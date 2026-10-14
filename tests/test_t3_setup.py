@@ -1,5 +1,6 @@
 import argparse
 import json
+import subprocess
 import tomllib
 
 import pytest
@@ -102,3 +103,61 @@ def test_setup_rolls_back_on_protocol_1_server(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match=r"protocol 1; Herdeck needs 2 \(T3 0.0.46\+\)"):
         t3_setup.connect(args)
     assert path.read_text() == old and not secrets and revoked
+
+
+def _setup_env(tmp_path, monkeypatch, check_output):
+    path = tmp_path / "config.toml"
+    path.write_text("[custom]\nkeep = true\n")
+    secrets, revoked = {}, []
+    monkeypatch.delenv("HERDECK_LOCAL_CONFIG", raising=False)
+    monkeypatch.delenv("HERDECK_PROFILE", raising=False)
+    monkeypatch.setattr(t3_setup, "get_secret", secrets.get)
+    monkeypatch.setattr(t3_setup, "peek_keychain", secrets.get)
+    monkeypatch.setattr(t3_setup, "set_secret", lambda k, v: secrets.update({k: v}))
+    monkeypatch.setattr(t3_setup, "clear_secret", lambda k: secrets.pop(k, None))
+    monkeypatch.setattr("herdeck.secrets.get_secret", secrets.get)
+    monkeypatch.setattr(t3_setup.subprocess, "check_output", check_output)
+    monkeypatch.setattr(t3_setup.subprocess, "run", lambda cmd, **kw: revoked.append(cmd))
+    monkeypatch.setattr(t3_setup.T3Http, "get", lambda self, route: V2 if route.endswith("environment") else
+                        {"threads": [], "archivedThreads": [], "projects": []})
+    return path, secrets, revoked
+
+
+def _layout(tmp_path):
+    v = "0.0.46"
+    d = tmp_path / "runtime/versions" / v
+    d.mkdir(parents=True)
+    (d / "t3").write_text("")
+    (tmp_path / "runtime/service-state.json").write_text(json.dumps({"activeVersion": v}))
+    return str(d / "t3")
+
+
+@pytest.mark.parametrize("mode", ["explicit", "runtime", "path"])
+def test_setup_resolves_cli_for_issue_and_revoke(tmp_path, monkeypatch, mode):
+    issued = []
+    def out(cmd, **kw):
+        issued.append(cmd)
+        return json.dumps({"token": "tok", "sessionId": "sid", "expiresAt": "later"})
+    path, secrets, revoked = _setup_env(tmp_path, monkeypatch, out)
+    runtime = _layout(tmp_path) if mode != "path" else None
+    binary = "/opt/my/t3" if mode == "explicit" else None
+    expected = {"explicit": "/opt/my/t3", "runtime": runtime, "path": "t3"}[mode]
+    monkeypatch.setattr(t3_setup, "atomic_write", lambda p, text: (_ for _ in ()).throw(OSError("full")))
+    args = argparse.Namespace(config=path, base_dir=tmp_path, url="http://127.0.0.1:3773", id="pilot", binary=binary)
+    with pytest.raises(OSError):
+        t3_setup.connect(args)
+    assert issued[0][0] == expected
+    assert revoked and revoked[0][0] == expected
+
+
+def test_failed_issue_gives_clear_message_and_writes_nothing(tmp_path, monkeypatch):
+    def out(cmd, **kw):
+        raise subprocess.CalledProcessError(2, cmd, output="SECRET-TOKEN-LEAK")
+    path, secrets, revoked = _setup_env(tmp_path, monkeypatch, out)
+    old = path.read_text()
+    args = argparse.Namespace(config=path, base_dir=tmp_path, url="http://127.0.0.1:3773", id="pilot", binary="/opt/old/t3")
+    with pytest.raises(ValueError) as e:
+        t3_setup.connect(args)
+    msg = str(e.value)
+    assert "/opt/old/t3" in msg and "0.0.46+" in msg and "SECRET-TOKEN-LEAK" not in msg
+    assert path.read_text() == old and not secrets and not revoked
