@@ -27,3 +27,13 @@ def test_probe_revokes_credential_on_success_and_failure(monkeypatch, fail):
     scopes = [issued[0][i + 1] for i, a in enumerate(issued[0]) if a == "--scope"]
     assert scopes == ["orchestration:read", "orchestration:operate"]
     assert calls == [["t3", "auth", "session", "revoke", "id-1", "--base-dir", "/tmp/pilot"]]
+
+
+def test_descriptor_summary_reads_the_real_descriptor():
+    from pathlib import Path
+
+    from tests.t3_probe_auth import descriptor_summary
+    desc = json.loads((Path(__file__).parent / "fixtures" / "t3v2" / "descriptor.json").read_text())
+    summary = descriptor_summary(desc)
+    assert summary["protocol"] == 2
+    assert summary["version"] == desc["serverVersion"] and summary["version"]

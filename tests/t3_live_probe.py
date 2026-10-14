@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from t3_probe_auth import session_token
+from t3_probe_auth import descriptor_summary, session_token
 
 from herdeck.config import ServerConfig
 from herdeck.model import Status
@@ -75,7 +75,7 @@ async def execute(client, connector, tid, timeout):
 async def pilot(args, token):
     client = T3Client(args.url, token)
     desc = client.descriptor()
-    out(protocol=desc.get("orchestrationProtocolVersion"), version=desc.get("version"))
+    out(**descriptor_summary(desc))
     connector = T3Connector(ServerConfig("t3-probe", args.url, token, "t3"),
                             on_snapshot=lambda *a: None, on_event=lambda *a: None,
                             on_connection=lambda *a: None, client=client)

@@ -18,3 +18,7 @@ def session_token(binary, base_dir):
             timeout=30, check=False)
         if result.returncode:
             raise RuntimeError("Could not revoke the disposable T3 probe session")
+
+
+def descriptor_summary(desc):
+    return {"protocol": desc.get("orchestrationProtocolVersion"), "version": desc.get("serverVersion")}
