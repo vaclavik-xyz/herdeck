@@ -405,6 +405,40 @@ async def test_uncertain_lock_clears_once_the_thread_changes():
 
 
 @pytest.mark.asyncio
+async def test_a_repeat_press_before_t3_publishes_the_effect_replays_the_same_commands():
+    # T3 accepted the reply but the shell has not changed yet: a double press
+    # must replay the remembered command (server dedupe), never a new message.
+    client = FakeClient(thread("completed"))
+    tid = tid_of("completed")
+    h = Harness(client)
+    await h.c.refresh()
+    msg = await h.press(tid, "continue", text="Next step")
+    await h.c.send({**msg, "req": "again"})
+    assert len(client.commands) == 2
+    assert client.commands[0] == client.commands[1]  # same commandId and messageId
+    assert [r["accepted"] for r in h.results] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_uncertain_lock_survives_a_stale_detail():
+    client = FakeClient(thread("approval"))
+    tid = tid_of("approval")
+    client.outcomes = [T3Error("lost"), T3Error("lost")]
+    h = Harness(client)
+    await h.c.refresh()
+    await h.press(tid, "approve")
+    client.detail_errors = {tid: T3Error("T3 HTTP 500", 500)}
+    client.threads[0].update(status="running", updatedAt="2026-10-14T15:30:00.000Z")
+    await h.c.refresh()
+    # The revision moved, but only on a stale detail: no evidence yet.
+    assert h.state(tid).backend_revision.endswith(":stale")
+    assert tid in h.c._uncertain
+    del client.detail_errors[tid]
+    await h.c.refresh()
+    assert tid not in h.c._uncertain  # a fresh read shows the thread changed
+
+
+@pytest.mark.asyncio
 async def test_a_different_press_while_uncertain_is_skipped():
     client = FakeClient(thread("approval"))
     tid = tid_of("approval")

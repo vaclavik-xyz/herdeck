@@ -10,9 +10,10 @@ Delivery rules: every press re-reads the thread, must carry the revision the
 deck saw and an action that is still offered. Each command gets a uuid4
 ``commandId`` that is remembered per (thread, revision, action, payload, text):
 a transport failure is retried once with the SAME command, and a later identical
-press replays it, so the server's commandId dedupe means it can never execute
-twice. A thread whose delivery outcome is unknown stays read-only until its
-revision changes.
+press (outcome unknown, or accepted before T3 published the new state) replays
+it, so the server's commandId dedupe means it can never execute twice. Only a
+rejection forgets the commands. A thread whose delivery outcome is unknown
+stays read-only until its revision changes.
 """
 from __future__ import annotations
 
@@ -245,8 +246,9 @@ class T3Connector:
         offer = (state.backend_revision, caps, actions, summary, detail)
         state.backend_actions, state.capabilities = actions, caps
         uncertain = self._uncertain.get(tid)
-        if uncertain is not None and uncertain != state.backend_revision:
+        if uncertain is not None and not stale and uncertain != state.backend_revision:
             # The thread changed: the command landed, or the user may act anew.
+            # A revision built from a stale detail is no evidence either way.
             self._uncertain.pop(tid)
             uncertain = None
         if stale or uncertain is not None:
@@ -369,15 +371,17 @@ class T3Connector:
         if outcome == "uncertain":
             self._uncertain[tid] = revision
             result = {"ok": False, "uncertain": True, "message": UNCERTAIN}
+        elif outcome == "accepted":
+            # Keep the commands: a repeat press on the same revision (T3 has
+            # not published the effect yet) replays them instead of minting
+            # new ids, so e.g. a double-pressed reply is sent once.
+            self._uncertain.pop(tid, None)
+            result = {"ok": True, "sent": True, "accepted": True}
         else:
-            self._deliveries.pop(key, None)
-            if outcome == "accepted":
-                self._uncertain.pop(tid, None)
-                result = {"ok": True, "sent": True, "accepted": True}
-            else:
-                if reason == OPERATE_DENIED:
-                    self._operate_denied = True
-                result = {"ok": False, "rejected": True, "message": reason}
+            self._deliveries.pop(key, None)  # rejected ids fail again on replay
+            if reason == OPERATE_DENIED:
+                self._operate_denied = True
+            result = {"ok": False, "rejected": True, "message": reason}
         self._on_result(req, result)
         try:
             await self.refresh(force=tid)
