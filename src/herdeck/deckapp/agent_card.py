@@ -426,7 +426,7 @@ class AgentCardMixin:
 
     def card_answer(self, server_id: str, pane_id: str, choice: str, revision: str) -> dict | None:
         """Answer the blocked prompt the user saw (``revision``) with ``choice``
-        (an option key, a fallback action id, or a T3 action id)."""
+        (an option key, a fallback action id, or a T3 option index)."""
         key = AgentKey(server_id, pane_id)
         orch = self._orch
         with self._card_deck_lock():
@@ -440,15 +440,17 @@ class AgentCardMixin:
             if agent.backend == "t3":
                 if not revision or revision != agent.backend_revision:
                     return outcome("stale")
-                option = next((o for o in agent.backend_actions if o["id"] == choice), None)
+                # ``choice`` is the option's index (the answer_options key): the
+                # action id alone is ambiguous between T3 options.
                 allowed = {o["key"] for o in orch.answer_options(key, "")}
-                if option is None or choice not in allowed:
+                if choice not in allowed:
                     return outcome("invalid")
+                option = agent.backend_actions[int(choice)]
                 cmd = Command(
                     "backend_action",
                     server_id,
                     pane_id,
-                    action=choice,
+                    action=option["id"],
                     payload=option.get("payload", {}),
                     decision_revision=agent.backend_revision,
                 )

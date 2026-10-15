@@ -516,11 +516,14 @@ class Orchestrator:
         confirm_for = set(safety.require_confirm_for)
         out: list[dict] = []
         if agent.backend == "t3":
-            for option in agent.backend_actions:
+            for index, option in enumerate(agent.backend_actions):
                 if option["id"] == "approve_always" and not safety.approve_always:
                     continue
                 out.append({
-                    "key": option["id"],
+                    # Several T3 options share an action id (every answer is
+                    # "answer", decline/cancel are "deny"), so the key is the
+                    # option's index in ``backend_actions``.
+                    "key": str(index),
                     "label": option["label"],
                     "id": option["id"],
                     "kind": "backend",
