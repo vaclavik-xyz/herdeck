@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 2,
+  "snapshotSequence": 54,
+  "threads": [
+    {
+      "createdBy": "system",
+      "creationSource": "server",
+      "id": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+      "projectId": "a100e613-4182-44dc-aec8-154b0ef9b7d4",
+      "title": "New thread",
+      "providerInstanceId": "claudeAgent",
+      "modelSelection": {
+        "instanceId": "claudeAgent",
+        "model": "claude-haiku-5-5"
+      },
+      "runtimeMode": "full-access",
+      "interactionMode": "default",
+      "branch": null,
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "rootThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428"
+      },
+      "forkedFrom": null,
+      "activeProviderThreadId": "provider-thread:provider:claudeAgent:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A2",
+      "latestRunId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:2",
+      "latestRunRequestedAt": "2026-10-14T15:05:33.476Z",
+      "latestRunStartedAt": "2026-10-14T15:05:33.583Z",
+      "latestRunCompletedAt": "2026-10-14T15:06:00.000Z",
+      "activeRunId": null,
+      "activityRunStartedAt": "2026-10-14T15:05:33.583Z",
+      "activityRunStatus": null,
+      "status": "completed",
+      "lastError": null,
+      "lastErrorClass": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": null,
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": "2026-10-14T15:05:33.476Z",
+      "latestUserAuthoredMessageAt": "2026-10-14T15:05:33.476Z",
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [
+        {
+          "taskId": "node:subagent:task-9",
+          "kind": "subagent",
+          "description": "Review the migration",
+          "childThreadId": "thread:delegated:a100e613-4182-44dc-aec8-154b0ef9b7d4:3c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e06"
+        }
+      ],
+      "providerInstanceHistory": [
+        "codex",
+        "claudeAgent"
+      ],
+      "goal": null,
+      "itemCount": 4,
+      "visibleItemCount": 4,
+      "createdAt": "2026-10-14T14:46:03.425Z",
+      "updatedAt": "2026-10-14T15:05:33.583Z",
+      "archivedAt": null,
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": "2026-10-14T14:50:00.000Z",
+      "titleRegeneration": null,
+      "deletedAt": null
+    },
+    {
+      "createdBy": "agent",
+      "creationSource": "mcp",
+      "id": "thread:delegated:a100e613-4182-44dc-aec8-154b0ef9b7d4:3c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e06",
+      "projectId": "a100e613-4182-44dc-aec8-154b0ef9b7d4",
+      "title": "Review the migration",
+      "providerInstanceId": "claudeAgent",
+      "modelSelection": {
+        "instanceId": "claudeAgent",
+        "model": "claude-haiku-5-5"
+      },
+      "runtimeMode": "approval-required",
+      "interactionMode": "default",
+      "branch": null,
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+        "relationshipToParent": "subagent",
+        "rootThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428"
+      },
+      "forkedFrom": {
+        "type": "node",
+        "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+        "nodeId": "node:thread:delegated:a100e613-4182-44dc-aec8-154b0ef9b7d4:3c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e06"
+      },
+      "activeProviderThreadId": null,
+      "latestRunId": "run:thread:thread:delegated:a100e613-4182-44dc-aec8-154b0ef9b7d4:3c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e06:ordinal:1",
+      "latestRunRequestedAt": null,
+      "latestRunStartedAt": null,
+      "latestRunCompletedAt": null,
+      "activeRunId": "run:thread:thread:delegated:a100e613-4182-44dc-aec8-154b0ef9b7d4:3c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e06:ordinal:1",
+      "activityRunStartedAt": null,
+      "activityRunStatus": "waiting",
+      "status": "waiting",
+      "lastError": null,
+      "lastErrorClass": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": {
+        "id": "req-approval-1",
+        "kind": "command",
+        "createdAt": "2026-10-14T15:10:00.000Z"
+      },
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": "2026-10-14T15:05:40.000Z",
+      "latestUserAuthoredMessageAt": null,
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [],
+      "providerInstanceHistory": [],
+      "goal": null,
+      "itemCount": 3,
+      "visibleItemCount": 3,
+      "createdAt": "2026-10-14T15:05:40.000Z",
+      "updatedAt": "2026-10-14T15:06:10.000Z",
+      "archivedAt": null,
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": null,
+      "titleRegeneration": null,
+      "deletedAt": null
+    }
+  ],
+  "archivedThreads": [],
+  "projects": [
+    {
+      "id": "a100e613-4182-44dc-aec8-154b0ef9b7d4",
+      "title": "proj",
+      "workspaceRoot": "/Users/dev/proj",
+      "repositoryIdentity": null,
+      "defaultModelSelection": null,
+      "defaultThreadEnvMode": null,
+      "autoPull": false,
+      "faviconPath": null,
+      "projectIcon": null,
+      "scripts": [],
+      "createdAt": "2026-10-14T14:46:02.753Z",
+      "updatedAt": "2026-10-14T14:46:02.753Z"
+    }
+  ]
+}

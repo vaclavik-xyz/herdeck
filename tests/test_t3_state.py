@@ -3,13 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from herdeck.model import Status
+from herdeck.model import SUBAGENTS_MAX, Status
 from herdeck.t3_state import (
+    SUBAGENT_STATUS,
     active_plan,
     last_assistant_text,
     live_request,
+    published,
     request_item,
     thread_state,
+    thread_subagents,
     timestamp,
 )
 
@@ -274,3 +277,101 @@ def test_previews_follow_the_deck_language():
     assert plan.preview.startswith("Plán je připravený — spusť ho, nebo ho odpovědí uprav.\n# Pl")
     # English stays the default, and the revision does not depend on the language.
     assert run(shell(status="failed")).backend_revision == cs(shell(status="failed")).backend_revision
+
+
+# --- subagents ---------------------------------------------------------------
+
+LINEAGE = {"parentThreadId": "t0", "relationshipToParent": "subagent", "rootThreadId": "t0"}
+
+
+def task(**kw):
+    base = {"id": "node:sub-1", "status": "running", "driver": "claudeAgent", "title": "Scan",
+            "prompt": "Scan the repo\nthoroughly.", "model": "claude-haiku-5-5",
+            "startedAt": "2026-10-14T11:00:00.000Z", "completedAt": None,
+            "updatedAt": "2026-10-14T11:00:05.000Z"}
+    base.update(kw)
+    return base
+
+
+# OrchestrationV2Subagent.status -> Herdeck Subagent.status. Active work
+# (isOrchestrationV2WorkActive) is running; idle is resumable but no longer
+# working; interrupted and cancelled ended without a result.
+SUBAGENT_STATUSES = [("pending", "running"), ("running", "running"), ("waiting", "running"),
+                     ("idle", "done"), ("completed", "done"), ("failed", "failed"),
+                     ("cancelled", "failed"), ("interrupted", "failed")]
+
+
+@pytest.mark.parametrize("t3_status,status", SUBAGENT_STATUSES)
+def test_subagent_status_table(t3_status, status):
+    assert SUBAGENT_STATUS[t3_status] == status
+    (sub,), running, total = thread_subagents({"subagents": [task(status=t3_status)]})
+    assert sub.status == status and (running, total) == (int(status == "running"), 1)
+
+
+def test_subagent_status_table_covers_the_contract():
+    assert set(SUBAGENT_STATUS) == {s for s, _ in SUBAGENT_STATUSES}
+
+
+def test_unknown_or_malformed_subagents_are_dropped():
+    subs = thread_subagents({"subagents": [task(status="future"), task(id=None), "junk",
+                                           task(startedAt=None, updatedAt=None)]})
+    assert subs == ((), 0, 0)
+    assert thread_subagents({}) == thread_subagents(None) == thread_subagents({"subagents": "x"}) == ((), 0, 0)
+
+
+def test_subagent_fields_map_onto_the_herdeck_model():
+    (sub,), _, _ = thread_subagents({"subagents": [task()]})
+    assert (sub.id, sub.provider, sub.type, sub.description, sub.model, sub.depth) == (
+        "node:sub-1", "claudeAgent", "Scan", "Scan the repo", "claude-haiku-5-5", 1)
+    assert sub.started_ms == timestamp("2026-10-14T11:00:00.000Z") * 1000 and sub.ended_ms is None
+    (done,), _, _ = thread_subagents({"subagents": [task(status="completed",
+                                                          completedAt="2026-10-14T11:01:00.000Z")]})
+    assert done.ended_ms - done.started_ms == 60_000
+    # A pending task has no startedAt yet: its last update stands in.
+    (pending,), _, _ = thread_subagents({"subagents": [task(status="pending", startedAt=None, title=None,
+                                                             model=None, modelSelection={"model": "m2"})]})
+    assert pending.started_ms == timestamp("2026-10-14T11:00:05.000Z") * 1000
+    assert (pending.type, pending.model) == ("", "m2")
+
+
+def test_subagent_text_and_count_bounds_are_the_shared_model_ones():
+    tasks = [task(id=f"node:{i}", startedAt=iso(i), title="x" * 500, prompt="‮" + "y" * 500)
+             for i in range(SUBAGENTS_MAX + 5)]
+    subs, running, total = thread_subagents({"subagents": tasks})
+    assert len(subs) == SUBAGENTS_MAX and (running, total) == (SUBAGENTS_MAX + 5, SUBAGENTS_MAX + 5)
+    assert subs[0].id == f"node:{SUBAGENTS_MAX + 4}"  # most recent first
+    assert len(subs[0].type) == 64 and subs[0].description == "y" * 160
+
+
+def test_a_long_subagent_id_is_hashed_not_clipped_into_a_collision():
+    a, b = "node:" + "a" * 200 + "1", "node:" + "a" * 200 + "2"
+    subs, _, _ = thread_subagents({"subagents": [task(id=a), task(id=b, startedAt=iso(1))]})
+    assert len({s.id for s in subs}) == 2 and all(len(s.id) <= 128 for s in subs)
+
+
+def test_parent_tile_carries_its_subagents():
+    sh, projects = fx_shell("subagent")
+    s = thread_state("srv", sh, fx_detail("subagent"), projects, "e", features={}, now=NOW)
+    assert (s.subagents_running, s.subagents_total) == (2, 4)
+    assert [x.status for x in s.subagents] == ["running", "running", "done", "failed"]
+    assert s.subagents[1].description == "Read the file `tsconfig.json` in the current working directory"
+
+
+def test_subagents_do_not_churn_the_revision():
+    """The revision gates deck presses; no action depends on the subagent list."""
+    a = run(shell(status="running"), {"subagents": [task()]})
+    b = run(shell(status="running"), {"subagents": [task(status="completed"), task(id="node:2")]})
+    assert a.subagents != b.subagents and a.backend_revision == b.backend_revision
+
+
+def test_subagent_children_are_hidden_unless_they_hold_a_request():
+    """T3 hides subagent children (Sidebar.logic.ts isSidebarSubagentThread); a
+    delegate_task child waiting on its own approval must stay reachable."""
+    assert published(shell(), NOW)
+    assert published(shell(lineage={**LINEAGE, "relationshipToParent": "fork"}), NOW)
+    assert published(shell(lineage=None), NOW)
+    assert not published(shell(lineage=LINEAGE), NOW)
+    assert not published(shell(lineage=LINEAGE, status="failed"), NOW)
+    assert published(shell(lineage=LINEAGE, pendingRuntimeRequest=REQ), NOW)
+    assert not published(shell(lineage=LINEAGE, pendingRuntimeRequest=REQ), NOW, archived=True)
+    assert not published(shell(lineage=LINEAGE, pendingRuntimeRequest=REQ, deletedAt=iso(-5)), NOW)

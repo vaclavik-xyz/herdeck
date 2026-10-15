@@ -1,7 +1,9 @@
 """T3 Code backend connector on orchestration protocol 2.
 
 Reads poll the HTTP shell every second and fetch a thread's bounded detail only
-when it changed; actions are dispatched as V2 commands over the WebSocket RPC.
+when it changed; subagent children are listed on their parent's tile instead
+of getting one (``t3_state.published``). Actions are dispatched as V2 commands
+over the WebSocket RPC.
 The callback surface matches Herdeck's bridge connector (``on_snapshot``,
 ``on_connection``, ``on_result``, ``health()``, ``send()``, ``run()``,
 ``stop()``). Contract: docs/t3-code-integration.md.
@@ -28,7 +30,7 @@ from datetime import UTC, datetime
 from .i18n import tr
 from .t3_actions import Incompatible, build_commands, capabilities, negotiate, thread_actions
 from .t3_client import T3Client, T3Error, T3Http, T3Rejected
-from .t3_state import active_plan, lifecycle, thread_state
+from .t3_state import active_plan, lifecycle, published, thread_state
 
 # T3Error/T3Http are re-exported for settings.py.
 __all__ = ["T3Connector", "T3Error", "T3Http", "T3Rejected"]
@@ -175,6 +177,11 @@ class T3Connector:
                 continue
             if tid in states:
                 continue
+            try:
+                if not published(summary, now, archived):
+                    continue  # a subagent child: listed on its parent's tile
+            except _MALFORMED as exc:
+                self._malformed(tid, exc)
             fetched = await self._detail(tid, summary, archived, now, force)
             if fetched is None:
                 continue  # 404: the thread is gone

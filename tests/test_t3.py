@@ -379,6 +379,90 @@ async def test_a_malformed_thread_does_not_break_the_refresh(caplog):
     assert "malformed" in caplog.text
 
 
+# --- subagents -------------------------------------------------------------
+
+
+def family(name, details):
+    """Every thread of a multi-thread shell fixture, each with its detail (or {})."""
+    shells = fx(f"shell_{name}")["threads"]
+    return [(s, fx(details[s["id"]])["projection"] if s["id"] in details else {}) for s in shells]
+
+
+@pytest.mark.asyncio
+async def test_subagent_children_are_not_tiles_and_their_detail_is_not_read():
+    threads = family("subagent", {tid_of("subagent"): "detail_subagent"})
+    parent, fork = threads[0][0]["id"], threads[-1][0]["id"]
+    client = FakeClient(*threads)
+    h = Harness(client)
+    await h.c.refresh()
+    assert set(h.c.states) == {parent, fork}  # a fork is a thread of its own
+    assert [s.key.pane_id for s in h.snapshots[-1][1]] == [parent, fork]
+    assert set(client.detail_calls) == {parent, fork}
+    s = h.state(parent)
+    assert (s.subagents_running, s.subagents_total) == (2, 4)
+    assert s.subagents[1].type == "Read tsconfig"
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_update_refreshes_the_list_but_keeps_the_revision():
+    client = FakeClient(*family("subagent", {tid_of("subagent"): "detail_subagent"}))
+    parent = tid_of("subagent")
+    h = Harness(client)
+    await h.c.refresh()
+    revision = h.state(parent).backend_revision
+    # subagent.updated bumps the parent projection's updatedAt (ProjectionStore
+    # applyToProjection), so the parent's next detail read carries the change.
+    for sub in client.details[parent]["subagents"]:
+        sub["status"] = "completed"
+    client.threads[0]["updatedAt"] = "2026-10-14T15:07:00.000Z"
+    await h.c.refresh()
+    s = h.state(parent)
+    assert s.subagents_running == 0 and {x.status for x in s.subagents} == {"done"}
+    assert s.backend_revision == revision
+
+
+@pytest.mark.asyncio
+async def test_a_native_subagent_approval_is_answered_on_the_parent():
+    """Codex/OpenCode ask a subagent's approval on the parent thread and run;
+    the child shell never holds the request (subagent_v2_approval fixture)."""
+    parent_shell, parent_detail = thread("approval")
+    child = copy.deepcopy(parent_shell)
+    child.update(id="child", pendingRuntimeRequest=None, status="idle",
+                 lineage={"parentThreadId": parent_shell["id"], "relationshipToParent": "subagent",
+                          "rootThreadId": parent_shell["id"]})
+    client = FakeClient((parent_shell, parent_detail), (child, {}))
+    h = Harness(client)
+    await h.c.refresh()
+    assert set(h.c.states) == {parent_shell["id"]}
+    await h.press(parent_shell["id"], "approve")
+    assert client.commands[0]["threadId"] == parent_shell["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_child_holding_its_own_request_stays_a_tile_until_answered():
+    """A delegate_task child (creationSource "mcp") runs its own provider
+    session; T3 does not roll its request up to the parent shell."""
+    child = fx("shell_subagent_request")["threads"][1]["id"]
+    parent = tid_of("subagent_request")
+    client = FakeClient(*family("subagent_request", {parent: "detail_subagent_request_parent",
+                                                     child: "detail_subagent_request"}))
+    h = Harness(client)
+    await h.c.refresh()
+    assert set(h.c.states) == {parent, child}
+    s = h.state(child)
+    assert s.status == Status.BLOCKED and s.attention == "approval" and "approve" in s.capabilities
+    p = h.state(parent)
+    assert p.status == Status.WAITING and p.subagents_running == 1
+    await h.press(child, "approve")
+    assert client.commands[0]["threadId"] == child
+    assert client.commands[0]["requestId"] == "req-approval-1"
+    client.threads[1].update(pendingRuntimeRequest=None, status="running",
+                             updatedAt="2026-10-14T15:20:00.000Z")
+    await h.c.refresh()
+    assert set(h.c.states) == {parent}
+    assert child not in h.c._cache
+
+
 # --- delivery --------------------------------------------------------------
 
 
