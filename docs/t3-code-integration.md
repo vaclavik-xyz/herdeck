@@ -77,6 +77,51 @@ appears (a pending request, a new failure, a completion after the snooze, a
 queued turn). Archived threads stay in the snapshot so a deck pin keeps its
 tile, but do not count as active work.
 
+## Subagents and lineage
+
+A thread whose `lineage.relationshipToParent` is `"subagent"` is a subagent
+child: a provider-native subagent (Claude's Agent tool, Codex or OpenCode
+subagents; `creationSource: "provider"`) or a T3 `delegate_task` child
+(`creationSource: "mcp"`). T3 hides these in its sidebar, its notifications
+and its mobile list, and Herdeck does the same: a child is not a tile, its
+detail is not read, and it raises no notification. Forks
+(`relationshipToParent: "fork"`) stay tiles of their own.
+
+Requests. A provider-native subagent's approval or question is asked on the
+parent's thread and run: the parent shell's `pendingRuntimeRequest` carries
+it, the child shell's stays `null`, and the parent's tile answers it with
+`runtime-request.respond` on the parent thread (upstream fixtures
+`subagent_v2_approval` and `opencode_running_child_approval`). A delegate_task
+child runs its own provider session, so a request it waits on lives only on
+the child's own shell (the shell's request is never rolled up from other
+threads). So the rule is: **a subagent child that holds a pending request,
+and is neither archived nor deleted, is shown as its own tile until the
+request is answered**, with the usual approve and answer actions on the
+child's thread. Then it is hidden again.
+
+The parent's subagent list comes from the `subagents` array of the parent's
+detail. That array is in the `/bounded` detail too (all active subagents plus
+those of its recent runs), and a `subagent.updated` event bumps the parent's
+`updatedAt`, so the parent's detail is read again when one changes. Child
+shells cannot be used for this: a provider-native child has no runs, so its
+shell status stays `idle` while it works. Each projection lists only its own
+direct subagents, so the list has depth 1 only.
+
+| T3 subagent status | Herdeck subagent status |
+|---|---|
+| `pending`, `running`, `waiting` | running |
+| `idle`, `completed` | done |
+| `failed`, `cancelled`, `interrupted` | failed |
+| anything else | dropped |
+
+Fields: `title` is the label (`type`), the first prompt line is the
+description, plus `driver`, `model` (or `modelSelection.model`), `startedAt`
+(`updatedAt` for a task that has not started yet) and `completedAt`. Ids longer
+than the model bound are hashed rather than clipped. The text and count bounds
+are the shared ones (`parse_subagents`: at most 20, most recent first);
+`subagents_running` and `subagents_total` count every listed subagent. The
+list is not part of the tile's revision, because no deck action depends on it.
+
 ## Done and seen
 
 Done is decided by the T3 server: a completed run is Done while its completion
@@ -98,7 +143,7 @@ excepted). Commands are built in `src/herdeck/t3_actions.py`.
 | Approve / Approve for session / Approve always / Deny | approval request that is still live; one action per option T3 lists (session and always need a second press) | `runtime-request.respond` with `decision` |
 | Answer | user-input request that is live and has a single question without multi-select; one action per option | `runtime-request.respond` with `answers` |
 | Stop | a run is active | `run.interrupt` (`holdQueue: true`) |
-| Reply | status IDLE or DONE | `message.dispatch`, 1 to 4096 characters |
+| Reply | status IDLE or DONE, or PLAN READY | `message.dispatch`, 1 to 4096 characters; on PLAN READY the thread stays in plan mode and the reply refines the plan (no `sourcePlanRef`), as T3's own plan follow-up does |
 | Implement plan (confirm) | PLAN READY with an active plan | `thread.interaction-mode.set` to `default`, then `message.dispatch` with `PLEASE IMPLEMENT THIS PLAN:` and the plan (up to 120000 characters) |
 | Mark seen | DONE and `threadVisitedTracking` | `thread.visit` with the completion time |
 | Settle / Reopen | `threadSettlement`; Settle on idle, done or failed threads | `thread.settle` / `thread.unsettle` |
@@ -109,10 +154,11 @@ itself is queued after the run (`queue_after_active`).
 
 ## Delivery rules
 
-Every press re-reads the thread and must carry the revision the deck showed
-and an action that is still offered, otherwise the connector answers "Stale or
-already submitted T3 action". Each command gets a `commandId` that is
-remembered per thread, revision, action, payload and reply text.
+Every press re-reads the thread and must carry an action that is still
+offered ("T3 action is not available" otherwise, checked first) and the
+revision the deck showed ("Stale or already submitted T3 action" otherwise).
+Each command gets a `commandId` that is remembered per thread, revision,
+action, payload and reply text.
 
 - Transport failure: the same command is retried once after one second.
 - Still failing: the result is uncertain. The tile stays read-only until the
@@ -132,6 +178,14 @@ remembered per thread, revision, action, payload and reply text.
 - Detail read failures keep the cached detail and mark the tile `STALE`
   (read-only). A 404 drops the thread; 401 or 403 take the connection offline.
 
+The texts Herdeck writes into a tile preview itself (the notices above, "Answer
+in T3", "T3 error: ...", "Plan ready", the lifecycle prefix, the untitled
+thread name) follow `[view].language` (`src/herdeck/i18n.py`, keys `t3.*`); a
+config reload rebuilds the connector with the new language. Text from T3
+(prompts, plans, approval option labels) is shown as sent; the deck action
+labels (Implement plan, Mark seen, ...), the tile state labels (PLAN READY,
+STALE, ...) and the result messages of `send()` are still English only.
+
 ## Known limits
 
 - A never-opened completed thread is not Done (same as T3).
@@ -140,10 +194,14 @@ remembered per thread, revision, action, payload and reply text.
 - After an uncertain delivery the tile stays read-only until the thread
   changes; the deck offers no buttons meanwhile, and only a client holding the
   older revision (for example herdeck-ctl) can resend the same command.
-- The deck reports a T3 rejected or uncertain result as "sent". The result is
-  in the connector (`rejected` / `uncertain` with a message) but the deck does
-  not show it yet. This is tracked as a follow-up.
+- The desktop agent card shows a T3 rejected, uncertain or skipped result as
+  a failure with the connector's message. The deck tiles and drill do not show
+  the message yet.
 - No raw terminal keys, streaming or desktop thread navigation.
+- Subagent lists are one level deep: a subagent's own subagents live in the
+  hidden child's detail, which Herdeck does not read. A parent that is not
+  active (settled, snoozed, archived) is not re-read, so its tile keeps the
+  last list it had.
 
 ## What was removed, and why
 

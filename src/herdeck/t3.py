@@ -1,7 +1,9 @@
 """T3 Code backend connector on orchestration protocol 2.
 
 Reads poll the HTTP shell every second and fetch a thread's bounded detail only
-when it changed; actions are dispatched as V2 commands over the WebSocket RPC.
+when it changed; subagent children are listed on their parent's tile instead
+of getting one (``t3_state.published``). Actions are dispatched as V2 commands
+over the WebSocket RPC.
 The callback surface matches Herdeck's bridge connector (``on_snapshot``,
 ``on_connection``, ``on_result``, ``health()``, ``send()``, ``run()``,
 ``stop()``). Contract: docs/t3-code-integration.md.
@@ -25,9 +27,10 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+from .i18n import tr
 from .t3_actions import Incompatible, build_commands, capabilities, negotiate, thread_actions
 from .t3_client import T3Client, T3Error, T3Http, T3Rejected
-from .t3_state import active_plan, lifecycle, thread_state
+from .t3_state import active_plan, lifecycle, published, thread_state
 
 # T3Error/T3Http are re-exported for settings.py.
 __all__ = ["T3Connector", "T3Error", "T3Http", "T3Rejected"]
@@ -37,7 +40,6 @@ log = logging.getLogger("herdeck.t3")
 READ_STATE_OBSOLETE = ("[[servers]] desktop_read_state is obsolete: "
                        "T3 0.0.46+ keeps read state on the server")
 OPERATE_DENIED = "credential lacks orchestration:operate"
-OPERATE_NOTICE = "T3 credential lacks orchestration:operate — actions disabled.\n"
 UNCERTAIN = "T3 delivery uncertain; inspect the conversation before retrying"
 CREDENTIAL_INVALID = "T3 credential invalid or expired"
 UNAVAILABLE = "T3 unavailable; check the connection"
@@ -76,8 +78,10 @@ class T3Connector:
     capabilities = frozenset()
 
     def __init__(self, server, on_snapshot, on_event, on_connection, on_result=None,
-                 on_error=None, *, client=None, **kwargs):
+                 on_error=None, *, client=None, language="en", **kwargs):
         self.server = server
+        # [view].language of the deck; a config reload rebuilds the connector.
+        self._lang = language
         self.client = client or T3Client(server.url, server.token)
         self._on_snapshot = on_snapshot
         self._on_connection = on_connection
@@ -173,6 +177,11 @@ class T3Connector:
                 continue
             if tid in states:
                 continue
+            try:
+                if not published(summary, now, archived):
+                    continue  # a subagent child: listed on its parent's tile
+            except _MALFORMED as exc:
+                self._malformed(tid, exc)
             fetched = await self._detail(tid, summary, archived, now, force)
             if fetched is None:
                 continue  # 404: the thread is gone
@@ -226,7 +235,7 @@ class T3Connector:
         features = self._features
         try:
             state = thread_state(self.server.id, summary, detail, projects, self._epoch,
-                                 features=features, now=now, archived=archived)
+                                 features=features, now=now, archived=archived, lang=self._lang)
             actions = thread_actions(state, summary, detail, features, now)
             caps = capabilities(state, summary, actions)
             self._faulty.discard(tid)
@@ -234,7 +243,7 @@ class T3Connector:
             self._malformed(tid, exc)
             try:
                 state = thread_state(self.server.id, summary, {}, projects, self._epoch,
-                                     features=features, now=now, archived=archived)
+                                     features=features, now=now, archived=archived, lang=self._lang)
             except _MALFORMED:
                 return None
             actions, caps, stale = [], ("read",), True
@@ -249,13 +258,13 @@ class T3Connector:
         if stale or uncertain is not None:
             state.capabilities, state.backend_actions = ("read",), []
             state.backend_revision += ":stale" if stale else ":uncertain"
-            state.progress = "Stale detail" if stale else "Delivery uncertain — inspect T3"
-            state.preview = state.progress + ". Controls disabled. Inspect T3.\n" + state.preview
+            state.progress = tr(self._lang, "t3.stale" if stale else "t3.uncertain")
+            state.preview = tr(self._lang, "t3.read_only", reason=state.progress) + "\n" + state.preview
             if stale:
                 state.state_labels = {state.status.value: "STALE"}
         if self._operate_denied:
             state.capabilities, state.backend_actions = ("read",), []
-            state.preview = OPERATE_NOTICE + state.preview
+            state.preview = tr(self._lang, "t3.operate_denied") + "\n" + state.preview
         return state, (offer if not stale else None)
 
     async def run(self):
@@ -314,10 +323,10 @@ class T3Connector:
             raise T3Error("T3 detail is stale; controls disabled")
         revision, caps, actions, shell, detail = offer
         action = msg.get("action")
-        if msg.get("revision") != revision:
-            raise T3Error("Stale or already submitted T3 action")
         if action not in caps:
             raise T3Error("T3 action is not available")
+        if msg.get("revision") != revision:
+            raise T3Error("Stale or already submitted T3 action")
         payload = {}
         if action not in ("stop", "continue"):
             wanted = json.dumps(msg.get("payload"), sort_keys=True)

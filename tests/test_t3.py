@@ -84,7 +84,7 @@ class FakeClient:
 
 
 class Harness:
-    def __init__(self, client, server=None):
+    def __init__(self, client, server=None, **kwargs):
         self.client = client
         self.results, self.snapshots, self.connections = [], [], []
         self.c = T3Connector(server or ServerConfig("t3", "http://127.0.0.1:13773", "secret", "t3"),
@@ -92,7 +92,7 @@ class Harness:
                              on_event=lambda *a: None,
                              on_connection=lambda sid, up: self.connections.append((sid, up)),
                              on_result=lambda req, data: self.results.append(data),
-                             client=client)
+                             client=client, **kwargs)
         self.c._clock = lambda: NOW
         self.c._retry_delay = 0
         self.c._interval = 0
@@ -286,6 +286,54 @@ async def test_detail_404_drops_the_thread_and_other_errors_mark_it_stale():
 
 
 @pytest.mark.asyncio
+async def test_connector_notices_follow_the_deck_language():
+    client = FakeClient(thread("completed"), thread("approval", tid="t-approval"))
+    client.outcomes = [T3Rejected("credential lacks orchestration:operate")]
+    h = Harness(client, language="cs")
+    await h.c.refresh()
+    assert h.state("t-approval").preview == "Run `touch approval-probe.txt`?"
+    client.detail_errors = {"t-approval": T3Error("T3 HTTP 500", 500)}
+    client.threads[1]["updatedAt"] = "2026-10-14T15:30:00.000Z"
+    await h.c.refresh()
+    s = h.state("t-approval")
+    assert s.progress == "Zastaralý detail"
+    assert s.preview.startswith("Zastaralý detail. Ovládání je vypnuté. Zkontroluj T3.\nRun `touch")
+    await h.press(tid_of("completed"), "continue", text="go")
+    assert h.state(tid_of("completed")).preview.startswith(
+        "Token T3 nemá oprávnění orchestration:operate — akce jsou vypnuté.\n")
+
+
+def test_the_connector_factory_passes_the_language_only_to_t3():
+    from herdeck.config import DEFAULT_PROFILES
+    from herdeck.connector import Connector, create_connector
+    from herdeck.deckapp.live import build_live_source
+
+    def cb(*a):
+        return None
+    t3 = create_connector(ServerConfig("t3", "http://127.0.0.1:13773", "x", "t3"), on_snapshot=cb,
+                          on_event=cb, on_connection=cb, language="cs")
+    assert isinstance(t3, T3Connector) and t3._lang == "cs"
+    herdr = create_connector(ServerConfig("h", "ws://h", "x"), on_snapshot=cb, on_event=cb,
+                             on_connection=cb, language="cs")
+    assert isinstance(herdr, Connector)
+    seen = []
+
+    class Runner:
+        def __init__(self, conn):
+            pass
+
+        def start(self):
+            pass
+
+    config = Config(servers=[ServerConfig("t3", "http://127.0.0.1:3773", "x", "t3")],
+                    profiles=dict(DEFAULT_PROFILES), overview_order=["t3"], grid=(5, 3))
+    config.view.language = "cs"
+    build_live_source(config, connector_factory=lambda server, **kw: seen.append(kw.get("language")),
+                      runner_factory=Runner)
+    assert seen == ["cs"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("code", [401, 403])
 async def test_detail_auth_errors_take_the_connection_down(code):
     client = FakeClient(thread("completed"))
@@ -329,6 +377,90 @@ async def test_a_malformed_thread_does_not_break_the_refresh(caplog):
     assert h.state("bad-options").backend_actions == []
     assert "bad-shell" not in h.c.states or h.state("bad-shell").capabilities == ("read",)
     assert "malformed" in caplog.text
+
+
+# --- subagents -------------------------------------------------------------
+
+
+def family(name, details):
+    """Every thread of a multi-thread shell fixture, each with its detail (or {})."""
+    shells = fx(f"shell_{name}")["threads"]
+    return [(s, fx(details[s["id"]])["projection"] if s["id"] in details else {}) for s in shells]
+
+
+@pytest.mark.asyncio
+async def test_subagent_children_are_not_tiles_and_their_detail_is_not_read():
+    threads = family("subagent", {tid_of("subagent"): "detail_subagent"})
+    parent, fork = threads[0][0]["id"], threads[-1][0]["id"]
+    client = FakeClient(*threads)
+    h = Harness(client)
+    await h.c.refresh()
+    assert set(h.c.states) == {parent, fork}  # a fork is a thread of its own
+    assert [s.key.pane_id for s in h.snapshots[-1][1]] == [parent, fork]
+    assert set(client.detail_calls) == {parent, fork}
+    s = h.state(parent)
+    assert (s.subagents_running, s.subagents_total) == (2, 4)
+    assert s.subagents[1].type == "Read tsconfig"
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_update_refreshes_the_list_but_keeps_the_revision():
+    client = FakeClient(*family("subagent", {tid_of("subagent"): "detail_subagent"}))
+    parent = tid_of("subagent")
+    h = Harness(client)
+    await h.c.refresh()
+    revision = h.state(parent).backend_revision
+    # subagent.updated bumps the parent projection's updatedAt (ProjectionStore
+    # applyToProjection), so the parent's next detail read carries the change.
+    for sub in client.details[parent]["subagents"]:
+        sub["status"] = "completed"
+    client.threads[0]["updatedAt"] = "2026-10-14T15:07:00.000Z"
+    await h.c.refresh()
+    s = h.state(parent)
+    assert s.subagents_running == 0 and {x.status for x in s.subagents} == {"done"}
+    assert s.backend_revision == revision
+
+
+@pytest.mark.asyncio
+async def test_a_native_subagent_approval_is_answered_on_the_parent():
+    """Codex/OpenCode ask a subagent's approval on the parent thread and run;
+    the child shell never holds the request (subagent_v2_approval fixture)."""
+    parent_shell, parent_detail = thread("approval")
+    child = copy.deepcopy(parent_shell)
+    child.update(id="child", pendingRuntimeRequest=None, status="idle",
+                 lineage={"parentThreadId": parent_shell["id"], "relationshipToParent": "subagent",
+                          "rootThreadId": parent_shell["id"]})
+    client = FakeClient((parent_shell, parent_detail), (child, {}))
+    h = Harness(client)
+    await h.c.refresh()
+    assert set(h.c.states) == {parent_shell["id"]}
+    await h.press(parent_shell["id"], "approve")
+    assert client.commands[0]["threadId"] == parent_shell["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_child_holding_its_own_request_stays_a_tile_until_answered():
+    """A delegate_task child (creationSource "mcp") runs its own provider
+    session; T3 does not roll its request up to the parent shell."""
+    child = fx("shell_subagent_request")["threads"][1]["id"]
+    parent = tid_of("subagent_request")
+    client = FakeClient(*family("subagent_request", {parent: "detail_subagent_request_parent",
+                                                     child: "detail_subagent_request"}))
+    h = Harness(client)
+    await h.c.refresh()
+    assert set(h.c.states) == {parent, child}
+    s = h.state(child)
+    assert s.status == Status.BLOCKED and s.attention == "approval" and "approve" in s.capabilities
+    p = h.state(parent)
+    assert p.status == Status.WAITING and p.subagents_running == 1
+    await h.press(child, "approve")
+    assert client.commands[0]["threadId"] == child
+    assert client.commands[0]["requestId"] == "req-approval-1"
+    client.threads[1].update(pendingRuntimeRequest=None, status="running",
+                             updatedAt="2026-10-14T15:20:00.000Z")
+    await h.c.refresh()
+    assert set(h.c.states) == {parent}
+    assert child not in h.c._cache
 
 
 # --- delivery --------------------------------------------------------------
@@ -609,6 +741,30 @@ async def test_implement_plan_stops_after_a_rejected_first_command():
 
 
 @pytest.mark.asyncio
+async def test_a_reply_to_a_ready_plan_is_one_plan_mode_message():
+    client = FakeClient(thread("plan", status="completed"))
+    tid = tid_of("plan")
+    h = Harness(client)
+    await h.c.refresh()
+    assert "continue" in h.state(tid).capabilities
+    await h.press(tid, "continue", text="Drop step 3")
+    [cmd] = client.commands
+    assert cmd["type"] == "message.dispatch" and cmd["text"] == "Drop step 3"
+    assert "sourcePlanRef" not in cmd
+    assert h.results[-1]["accepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_action_is_reported_before_the_revision():
+    client = FakeClient(thread("running"))
+    h = Harness(client)
+    await h.c.refresh()
+    await h.press(tid_of("running"), "continue", text="hi", revision="old")
+    assert client.commands == []
+    assert h.results[-1] == {"ok": False, "skipped": True, "message": "T3 action is not available"}
+
+
+@pytest.mark.asyncio
 async def test_continue_with_overlong_text_is_skipped():
     client = FakeClient(thread("completed"))
     h = Harness(client)
@@ -695,3 +851,21 @@ async def test_mixed_deck_routes_t3_choice_without_terminal_keys():
     assert cmd.kind == "backend_action" and cmd.server_id == "t3"
     assert cmd.payload == {"requestId": "req-approval-1", "decision": "accept"}
     assert cmd.keys == [] and cmd.terminal_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_ready_plan_drill_offers_implement_and_the_reply_macros():
+    from herdeck.config import DEFAULT_PROFILES
+    config = Config(servers=[ServerConfig("t3", "http://127.0.0.1:3773", "x", "t3")],
+                    profiles=dict(DEFAULT_PROFILES), overview_order=["t3"], grid=(5, 3))
+    orch = Orchestrator(config)
+    h = Harness(FakeClient(thread("plan", status="completed")))
+    await h.c.refresh()
+    t3 = h.state(tid_of("plan"))
+    orch.apply_snapshot("t3", [t3])
+    orch._drill = t3.key
+    actions, _, _ = orch._drill_layout()
+    assert actions[0]["id"] == "implement_plan"
+    reply = next(a for a in actions if "id" not in a)
+    cmd = reply["make"](t3.key)
+    assert cmd.kind == "backend_action" and cmd.action == "continue" and cmd.text

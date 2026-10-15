@@ -8,12 +8,20 @@ import hashlib
 import json
 from datetime import datetime
 
-from herdeck.model import AgentKey, AgentState, Status
+from herdeck.i18n import tr
+from herdeck.model import AgentKey, AgentState, Status, parse_subagents
 
 PREVIEW_LIMIT = 12000
-FORM_NOTICE = "Answer in T3 — this form needs the full conversation UI.\n"
 _TASK_LABELS = {"subagent": "SUBAGENT", "command": "COMMAND",
                 "monitor": "MONITOR", "background_task": "BACKGROUND"}
+# OrchestrationV2Subagent.status -> Herdeck Subagent.status. pending, running
+# and waiting are active work (upstream isOrchestrationV2WorkActive); idle is
+# resumable but no longer working; cancelled and interrupted ended without a
+# result. Any other status is dropped.
+SUBAGENT_STATUS = {"pending": "running", "running": "running", "waiting": "running",
+                   "idle": "done", "completed": "done",
+                   "failed": "failed", "cancelled": "failed", "interrupted": "failed"}
+_SUBAGENT_ID_MAX = 128  # model._SUBAGENT_TEXT_MAX["id"]
 
 
 def timestamp(value):
@@ -60,6 +68,60 @@ def lifecycle(shell, now, archived=False):
     if until is None or until <= now or queued_start(shell, now) or raised_hand(shell):
         return "active"
     return "snoozed"
+
+
+def published(shell, now, archived=False):
+    """Whether a thread gets a tile of its own.
+
+    T3 hides subagent children (``lineage.relationshipToParent == "subagent"``)
+    in its sidebar, notifications and mobile list; a provider-native subagent's
+    approval is asked on the parent's thread and run. A child that holds a
+    request itself (a delegate_task child runs its own session) stays a tile
+    while the request is pending: T3 does not roll it up to the parent.
+    """
+    lineage = shell.get("lineage")
+    if not isinstance(lineage, dict) or lineage.get("relationshipToParent") != "subagent":
+        return True
+    return bool(shell.get("pendingRuntimeRequest")) and lifecycle(shell, now, archived) == "active"
+
+
+def _ms(value):
+    seconds = timestamp(value)
+    return None if seconds is None else round(seconds * 1000)
+
+
+def thread_subagents(detail):
+    """``(subagents, running, total)`` from the projection's ``subagents``.
+
+    Each projection lists its own direct subagents (nested ones live in the
+    hidden child's projection, which is not read). The bounded detail keeps the
+    active ones and those of its recent runs. Child shells are no substitute:
+    a provider-native child has no runs, so its shell status stays ``idle``.
+    The counts are taken before the shared ``SUBAGENTS_MAX`` clip.
+    """
+    tasks = (detail or {}).get("subagents")
+    raw = []
+    for task in tasks if isinstance(tasks, list) else []:
+        if not isinstance(task, dict) or not isinstance(task.get("id"), str) or not task["id"]:
+            continue
+        status = SUBAGENT_STATUS.get(task.get("status"))
+        started = _ms(task.get("startedAt"))
+        if started is None:
+            started = _ms(task.get("updatedAt"))  # pending: not started yet
+        if status is None or started is None:
+            continue
+        sid = task["id"]
+        if len(sid) > _SUBAGENT_ID_MAX:  # clipping could merge two ids
+            sid = "t3:" + hashlib.sha256(sid.encode()).hexdigest()
+        prompt = task.get("prompt") if isinstance(task.get("prompt"), str) else ""
+        selection = task.get("modelSelection") if isinstance(task.get("modelSelection"), dict) else {}
+        raw.append({"id": sid, "provider": task.get("driver"), "type": task.get("title"),
+                    "description": next((line.strip() for line in prompt.splitlines() if line.strip()), ""),
+                    "model": task.get("model") or selection.get("model"), "depth": 1,
+                    "status": status, "started_ms": started,
+                    "ended_ms": None if status == "running" else _ms(task.get("completedAt"))})
+    running = sum(1 for r in raw if r["status"] == "running")
+    return parse_subagents(raw), running, len(raw)
 
 
 def classify(shell, now, life):
@@ -155,40 +217,40 @@ def last_assistant_text(detail):
     return ""
 
 
-def _input_preview(item, live):
+def _input_preview(item, live, lang):
     questions = item.get("questions") or []
     lines = []
     for q in questions:
         lines.append(f"{q.get('header') or ''}: {q.get('question') or ''}".strip(": "))
         lines.extend(f"- {o.get('label')}" for o in q.get("options") or [])
     single = len(questions) == 1 and not questions[0].get("multiSelect")
-    return ("" if single and live else FORM_NOTICE) + "\n".join(lines)
+    return ("" if single and live else tr(lang, "t3.form_notice") + "\n") + "\n".join(lines)
 
 
-def _preview(shell, detail, attention, life):
+def _preview(shell, detail, attention, life, lang):
     req = shell.get("pendingRuntimeRequest")
     text = ""
     if req and life == "active":
         item = request_item(detail, req.get("id"))
         if item and item.get("type") == "user_input_request":
-            text = _input_preview(item, live_request(detail, req.get("id")))
+            text = _input_preview(item, live_request(detail, req.get("id")), lang)
         elif item:
             text = str(item.get("prompt") or item.get("requestKind") or "")
         else:
-            text = "Answer in T3 — details unavailable." if attention == "input" else "Approval requested"
+            text = tr(lang, "t3.input_unavailable" if attention == "input" else "t3.approval_requested")
     elif attention == "plan":
         plan = active_plan(detail)
-        text = "Plan ready — choose how to implement it.\n" + (plan["markdown"] if plan else "")
+        text = tr(lang, "t3.plan_ready") + "\n" + (plan["markdown"] if plan else "")
     elif attention == "error":
-        text = "T3 error: " + (shell.get("lastError") or "The latest run failed. Inspect T3 for details.")
+        text = tr(lang, "t3.error", error=shell.get("lastError") or tr(lang, "t3.error_default"))
     else:
         text = last_assistant_text(detail)
     if life != "active":
-        text = f"{life.capitalize()} thread.\n" + text
+        text = tr(lang, "t3.life_" + life) + "\n" + text
     return text[:PREVIEW_LIMIT]
 
 
-def thread_state(server_id, shell, detail, projects, epoch, *, features, now, archived=False):
+def thread_state(server_id, shell, detail, projects, epoch, *, features, now, archived=False, lang="en"):
     life = lifecycle(shell, now, archived)
     status, attention, label, activity = classify(shell, now, life)
     req = shell.get("pendingRuntimeRequest")
@@ -202,7 +264,9 @@ def thread_state(server_id, shell, detail, projects, epoch, *, features, now, ar
                 shell.get("lastVisitedAt"), shell.get("interactionMode"), features]
     revision = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
     project = (projects or {}).get(shell.get("projectId")) or {}
-    title = shell.get("title") or "T3 conversation"
+    title = shell.get("title") or tr(lang, "t3.untitled")
+    # Not part of the revision: no action depends on the subagent list.
+    subagents, running, total = thread_subagents(detail)
     return AgentState(
         key=AgentKey(server_id, shell["id"]),
         agent_type=(shell.get("modelSelection") or {}).get("instanceId")
@@ -211,8 +275,9 @@ def thread_state(server_id, shell, detail, projects, epoch, *, features, now, ar
         project=project.get("title") or "", repo=project.get("workspaceRoot") or "",
         branch=shell.get("branch") or "", display_agent="T3 Code", backend="t3",
         capabilities=(), backend_revision=revision, backend_actions=[],
-        preview=_preview(shell, detail, attention, life), lifecycle=life,
+        preview=_preview(shell, detail, attention, life, lang), lifecycle=life,
         activity=activity, attention=attention,
         completed_at=shell.get("latestRunCompletedAt") or "",
         state_labels={status.value: label} if label else {},
+        subagents_running=running, subagents_total=total, subagents=subagents,
     )

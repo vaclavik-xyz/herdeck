@@ -235,6 +235,7 @@ async def serve_elgato(config: Config, *, socket_path: str, token: str, make_ses
             ),
             # The 0.5 s _ticker pushes the render diff, so storing is enough.
             on_project_icon=lambda sid, icon: loop.call_soon_threadsafe(ingest_project_icon, icon),
+            language=config.view.language,
         )
         connectors[sc.id] = conn
 
