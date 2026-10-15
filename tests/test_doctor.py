@@ -1,3 +1,5 @@
+import pytest
+
 from herdeck.doctor import (
     Check,
     _socket_snapshot,
@@ -650,3 +652,24 @@ def test_collect_checks_includes_subagent_hooks(tmp_path, monkeypatch):
     checks = {check.name: check for check in collect_checks()}
     assert checks["subagent hooks"].ok is True
     assert "not installed" in checks["subagent hooks"].detail
+
+
+@pytest.mark.parametrize("descriptor,code,expected", [
+    ({"orchestrationProtocolVersion": 1}, None, "orchestration protocol 1; Herdeck needs 2"),
+    ("ok", 401, "credential invalid or expired"),
+    ("ok", 403, "credential lacks orchestration:read"),
+])
+def test_check_servers_t3_messages(monkeypatch, descriptor, code, expected):
+    from herdeck import t3_client
+    from herdeck.config import ServerConfig
+    from herdeck.doctor import check_servers
+
+    def get(self, route):
+        if route.endswith("environment") and descriptor != "ok":
+            return descriptor
+        if route.endswith("environment"):
+            return {"orchestrationProtocolVersion": 2, "capabilities": {}}
+        raise t3_client.T3Error("rejected", code)
+    monkeypatch.setattr(t3_client.T3Http, "get", get)
+    [c] = check_servers([ServerConfig("t3", "http://127.0.0.1:3773", "tok", "t3")], None)
+    assert not c.ok and expected in c.detail

@@ -1643,7 +1643,7 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 
 ## Known follow-ups
 
-- [T3 Code integration](docs/t3-code-integration.md): implementation and pilot tracking.
+- [T3 Code integration](docs/t3-code-integration.md): T3 0.0.46+ (orchestration protocol 2) contract, status mapping and delivery rules.
 - Confirm exact approve/deny key sequences per agent against live prompts
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is

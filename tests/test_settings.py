@@ -925,6 +925,8 @@ def test_hardware_maintenance_keys_parse_with_defaults(tmp_path):
 
 
 def test_t3_desktop_read_state_is_a_t3_server_option(tmp_path, monkeypatch):
+    # Obsolete since T3 orchestration V2 (read state is on the server), but an
+    # old config that still sets it must keep loading after an upgrade.
     monkeypatch.setenv("TOK", "secret")
     base = '[[servers]]\nid = "t3"\nurl = "http://127.0.0.1:3773"\ntoken_env = "TOK"\n'
     config = write(tmp_path / "config.toml", base + 'backend = "t3"\ndesktop_read_state = true\n')

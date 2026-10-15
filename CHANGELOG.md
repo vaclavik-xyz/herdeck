@@ -6,6 +6,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The T3 backend now requires T3 0.0.46+ (orchestration protocol 2; currently
+  the preview/nightly channel). Tiles show the true per-thread status from the
+  server, and Done/seen is shared through the server's `lastVisitedAt`:
+  opening a thread in T3 desktop or mobile clears Done on the deck, and "Mark
+  seen" clears it everywhere.
+- T3 actions (approve, deny, answer, stop, reply, implement plan, settle,
+  snooze, mark seen) are dispatched over the WebSocket with idempotent
+  retries. With a read-only token the tiles stay live and the
+  first refused action disables actions for that connection, with a notice on
+  every tile.
+- `herdeck-t3-connect` and renewal issue scoped tokens (`orchestration:read`
+  and `orchestration:operate`); renewal finds the CLI of T3 0.0.42+.
+
+### Removed
+- Support for T3 servers below 0.0.46 (orchestration V1); they show as
+  incompatible.
+- The T3 desktop read-state bridge and the `desktop_read_state` editor toggle.
+  The config key and `HERDECK_T3_DESKTOP_READ_STATE` are still accepted,
+  ignored, and logged once as obsolete.
+
 ## [0.15.0] - 2026-10-01
 
 ### Added

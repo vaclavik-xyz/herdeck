@@ -14,7 +14,6 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       url: "WebSocket address of the herdr bridge on the server (e.g. ws://100.x.y.z:8788), ideally a Tailscale IP.",
       token: "Name of the env var or keychain item holding the access token; the value can be saved straight to the keychain.",
       token_file: "Path to a 0600 file holding the token (~ expands); read after the env var, before the keychain. For launchd services.",
-      desktop_read_state: "T3 only: read this Mac's T3 desktop visit state, so opening a finished thread there clears its Done; default off.",
     },
     deck: {
       grid: "Deck grid size as columns×rows (e.g. 5x3); sets how many tiles fit on screen.",
@@ -150,7 +149,6 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       url: "WebSocket adresa herdr mostu na serveru (např. ws://100.x.y.z:8788), ideálně Tailscale IP.",
       token: "Název proměnné či položky klíčenky s přístupovým tokenem; hodnotu lze uložit rovnou do klíčenky.",
       token_file: "Cesta k souboru s tokenem s právy 0600 (~ se rozbalí); čte se po env proměnné a před klíčenkou. Pro launchd služby.",
-      desktop_read_state: "Jen T3: čte stav návštěv z T3 desktopu na tomto Macu, otevření hotového vlákna tam zruší Done; výchozí vypnuto.",
     },
     deck: {
       grid: "Rozměr mřížky decku ve tvaru sloupce×řádky (např. 5x3); určuje počet dlaždic na obrazovce.",
