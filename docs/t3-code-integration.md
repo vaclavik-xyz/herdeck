@@ -140,9 +140,9 @@ remembered per thread, revision, action, payload and reply text.
 - After an uncertain delivery the tile stays read-only until the thread
   changes; the deck offers no buttons meanwhile, and only a client holding the
   older revision (for example herdeck-ctl) can resend the same command.
-- The deck reports a T3 rejected or uncertain result as "sent". The result is
-  in the connector (`rejected` / `uncertain` with a message) but the deck does
-  not show it yet. This is tracked as a follow-up.
+- The desktop agent card shows a T3 rejected, uncertain or skipped result as
+  a failure with the connector's message. The deck tiles and drill do not show
+  the message yet.
 - No raw terminal keys, streaming or desktop thread navigation.
 
 ## What was removed, and why

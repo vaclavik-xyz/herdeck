@@ -110,6 +110,12 @@ def result_outcome(data: dict) -> dict:
             # "stale": the bridge saw this episode answered already (events.py)
             return outcome("stale")
         return outcome("rejected", str(message))
+    if data.get("rejected"):
+        # T3: the server refused the command (e.g. a read-only token).
+        return outcome("rejected", str(data.get("message") or ""))
+    if data.get("uncertain"):
+        # T3: delivery unknown; the connector locks the controls meanwhile.
+        return outcome("uncertain", str(data.get("message") or ""))
     if data.get("focused"):
         return outcome("focused")
     error = data.get("error")
