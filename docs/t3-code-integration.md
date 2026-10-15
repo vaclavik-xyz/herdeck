@@ -77,6 +77,51 @@ appears (a pending request, a new failure, a completion after the snooze, a
 queued turn). Archived threads stay in the snapshot so a deck pin keeps its
 tile, but do not count as active work.
 
+## Subagents and lineage
+
+A thread whose `lineage.relationshipToParent` is `"subagent"` is a subagent
+child: a provider-native subagent (Claude's Agent tool, Codex or OpenCode
+subagents; `creationSource: "provider"`) or a T3 `delegate_task` child
+(`creationSource: "mcp"`). T3 hides these in its sidebar, its notifications
+and its mobile list, and Herdeck does the same: a child is not a tile, its
+detail is not read, and it raises no notification. Forks
+(`relationshipToParent: "fork"`) stay tiles of their own.
+
+Requests. A provider-native subagent's approval or question is asked on the
+parent's thread and run: the parent shell's `pendingRuntimeRequest` carries
+it, the child shell's stays `null`, and the parent's tile answers it with
+`runtime-request.respond` on the parent thread (upstream fixtures
+`subagent_v2_approval` and `opencode_running_child_approval`). A delegate_task
+child runs its own provider session, so a request it waits on lives only on
+the child's own shell (the shell's request is never rolled up from other
+threads). So the rule is: **a subagent child that holds a pending request,
+and is neither archived nor deleted, is shown as its own tile until the
+request is answered**, with the usual approve and answer actions on the
+child's thread. Then it is hidden again.
+
+The parent's subagent list comes from the `subagents` array of the parent's
+detail. That array is in the `/bounded` detail too (all active subagents plus
+those of its recent runs), and a `subagent.updated` event bumps the parent's
+`updatedAt`, so the parent's detail is read again when one changes. Child
+shells cannot be used for this: a provider-native child has no runs, so its
+shell status stays `idle` while it works. Each projection lists only its own
+direct subagents, so the list has depth 1 only.
+
+| T3 subagent status | Herdeck subagent status |
+|---|---|
+| `pending`, `running`, `waiting` | running |
+| `idle`, `completed` | done |
+| `failed`, `cancelled`, `interrupted` | failed |
+| anything else | dropped |
+
+Fields: `title` is the label (`type`), the first prompt line is the
+description, plus `driver`, `model` (or `modelSelection.model`), `startedAt`
+(`updatedAt` for a task that has not started yet) and `completedAt`. Ids longer
+than the model bound are hashed rather than clipped. The text and count bounds
+are the shared ones (`parse_subagents`: at most 20, most recent first);
+`subagents_running` and `subagents_total` count every listed subagent. The
+list is not part of the tile's revision, because no deck action depends on it.
+
 ## Done and seen
 
 Done is decided by the T3 server: a completed run is Done while its completion
@@ -153,6 +198,10 @@ STALE, ...) and the result messages of `send()` are still English only.
   a failure with the connector's message. The deck tiles and drill do not show
   the message yet.
 - No raw terminal keys, streaming or desktop thread navigation.
+- Subagent lists are one level deep: a subagent's own subagents live in the
+  hidden child's detail, which Herdeck does not read. A parent that is not
+  active (settled, snoozed, archived) is not re-read, so its tile keeps the
+  last list it had.
 
 ## What was removed, and why
 
