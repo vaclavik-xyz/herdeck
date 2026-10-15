@@ -133,6 +133,14 @@ action, payload and reply text.
 - Detail read failures keep the cached detail and mark the tile `STALE`
   (read-only). A 404 drops the thread; 401 or 403 take the connection offline.
 
+The texts Herdeck writes into a tile preview itself (the notices above, "Answer
+in T3", "T3 error: ...", "Plan ready", the lifecycle prefix, the untitled
+thread name) follow `[view].language` (`src/herdeck/i18n.py`, keys `t3.*`); a
+config reload rebuilds the connector with the new language. Text from T3
+(prompts, plans, approval option labels) is shown as sent; the deck action
+labels (Implement plan, Mark seen, ...), the tile state labels (PLAN READY,
+STALE, ...) and the result messages of `send()` are still English only.
+
 ## Known limits
 
 - A never-opened completed thread is not Done (same as T3).

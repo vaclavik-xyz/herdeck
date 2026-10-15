@@ -84,7 +84,7 @@ class FakeClient:
 
 
 class Harness:
-    def __init__(self, client, server=None):
+    def __init__(self, client, server=None, **kwargs):
         self.client = client
         self.results, self.snapshots, self.connections = [], [], []
         self.c = T3Connector(server or ServerConfig("t3", "http://127.0.0.1:13773", "secret", "t3"),
@@ -92,7 +92,7 @@ class Harness:
                              on_event=lambda *a: None,
                              on_connection=lambda sid, up: self.connections.append((sid, up)),
                              on_result=lambda req, data: self.results.append(data),
-                             client=client)
+                             client=client, **kwargs)
         self.c._clock = lambda: NOW
         self.c._retry_delay = 0
         self.c._interval = 0
@@ -283,6 +283,54 @@ async def test_detail_404_drops_the_thread_and_other_errors_mark_it_stale():
     assert s.state_labels == {s.status.value: "STALE"}
     assert s.preview.startswith("Stale detail")
     assert "approval-probe" in s.preview  # the cached detail is kept
+
+
+@pytest.mark.asyncio
+async def test_connector_notices_follow_the_deck_language():
+    client = FakeClient(thread("completed"), thread("approval", tid="t-approval"))
+    client.outcomes = [T3Rejected("credential lacks orchestration:operate")]
+    h = Harness(client, language="cs")
+    await h.c.refresh()
+    assert h.state("t-approval").preview == "Run `touch approval-probe.txt`?"
+    client.detail_errors = {"t-approval": T3Error("T3 HTTP 500", 500)}
+    client.threads[1]["updatedAt"] = "2026-10-14T15:30:00.000Z"
+    await h.c.refresh()
+    s = h.state("t-approval")
+    assert s.progress == "Zastaralý detail"
+    assert s.preview.startswith("Zastaralý detail. Ovládání je vypnuté. Zkontroluj T3.\nRun `touch")
+    await h.press(tid_of("completed"), "continue", text="go")
+    assert h.state(tid_of("completed")).preview.startswith(
+        "Token T3 nemá oprávnění orchestration:operate — akce jsou vypnuté.\n")
+
+
+def test_the_connector_factory_passes_the_language_only_to_t3():
+    from herdeck.config import DEFAULT_PROFILES
+    from herdeck.connector import Connector, create_connector
+    from herdeck.deckapp.live import build_live_source
+
+    def cb(*a):
+        return None
+    t3 = create_connector(ServerConfig("t3", "http://127.0.0.1:13773", "x", "t3"), on_snapshot=cb,
+                          on_event=cb, on_connection=cb, language="cs")
+    assert isinstance(t3, T3Connector) and t3._lang == "cs"
+    herdr = create_connector(ServerConfig("h", "ws://h", "x"), on_snapshot=cb, on_event=cb,
+                             on_connection=cb, language="cs")
+    assert isinstance(herdr, Connector)
+    seen = []
+
+    class Runner:
+        def __init__(self, conn):
+            pass
+
+        def start(self):
+            pass
+
+    config = Config(servers=[ServerConfig("t3", "http://127.0.0.1:3773", "x", "t3")],
+                    profiles=dict(DEFAULT_PROFILES), overview_order=["t3"], grid=(5, 3))
+    config.view.language = "cs"
+    build_live_source(config, connector_factory=lambda server, **kw: seen.append(kw.get("language")),
+                      runner_factory=Runner)
+    assert seen == ["cs"]
 
 
 @pytest.mark.asyncio

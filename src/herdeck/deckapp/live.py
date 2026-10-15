@@ -1936,6 +1936,7 @@ def build_live_source(
             on_settings=source._on_settings,
             on_telegram=source._on_telegram,
             events_cursor=source._events_cursor,
+            language=config.view.language,
         )
         runner = runner_factory(connector)
         source.attach_runner(runner, selected.id)

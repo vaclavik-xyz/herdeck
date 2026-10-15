@@ -8,10 +8,10 @@ import hashlib
 import json
 from datetime import datetime
 
+from herdeck.i18n import tr
 from herdeck.model import AgentKey, AgentState, Status
 
 PREVIEW_LIMIT = 12000
-FORM_NOTICE = "Answer in T3 — this form needs the full conversation UI.\n"
 _TASK_LABELS = {"subagent": "SUBAGENT", "command": "COMMAND",
                 "monitor": "MONITOR", "background_task": "BACKGROUND"}
 
@@ -155,40 +155,40 @@ def last_assistant_text(detail):
     return ""
 
 
-def _input_preview(item, live):
+def _input_preview(item, live, lang):
     questions = item.get("questions") or []
     lines = []
     for q in questions:
         lines.append(f"{q.get('header') or ''}: {q.get('question') or ''}".strip(": "))
         lines.extend(f"- {o.get('label')}" for o in q.get("options") or [])
     single = len(questions) == 1 and not questions[0].get("multiSelect")
-    return ("" if single and live else FORM_NOTICE) + "\n".join(lines)
+    return ("" if single and live else tr(lang, "t3.form_notice") + "\n") + "\n".join(lines)
 
 
-def _preview(shell, detail, attention, life):
+def _preview(shell, detail, attention, life, lang):
     req = shell.get("pendingRuntimeRequest")
     text = ""
     if req and life == "active":
         item = request_item(detail, req.get("id"))
         if item and item.get("type") == "user_input_request":
-            text = _input_preview(item, live_request(detail, req.get("id")))
+            text = _input_preview(item, live_request(detail, req.get("id")), lang)
         elif item:
             text = str(item.get("prompt") or item.get("requestKind") or "")
         else:
-            text = "Answer in T3 — details unavailable." if attention == "input" else "Approval requested"
+            text = tr(lang, "t3.input_unavailable" if attention == "input" else "t3.approval_requested")
     elif attention == "plan":
         plan = active_plan(detail)
-        text = "Plan ready — choose how to implement it.\n" + (plan["markdown"] if plan else "")
+        text = tr(lang, "t3.plan_ready") + "\n" + (plan["markdown"] if plan else "")
     elif attention == "error":
-        text = "T3 error: " + (shell.get("lastError") or "The latest run failed. Inspect T3 for details.")
+        text = tr(lang, "t3.error", error=shell.get("lastError") or tr(lang, "t3.error_default"))
     else:
         text = last_assistant_text(detail)
     if life != "active":
-        text = f"{life.capitalize()} thread.\n" + text
+        text = tr(lang, "t3.life_" + life) + "\n" + text
     return text[:PREVIEW_LIMIT]
 
 
-def thread_state(server_id, shell, detail, projects, epoch, *, features, now, archived=False):
+def thread_state(server_id, shell, detail, projects, epoch, *, features, now, archived=False, lang="en"):
     life = lifecycle(shell, now, archived)
     status, attention, label, activity = classify(shell, now, life)
     req = shell.get("pendingRuntimeRequest")
@@ -202,7 +202,7 @@ def thread_state(server_id, shell, detail, projects, epoch, *, features, now, ar
                 shell.get("lastVisitedAt"), shell.get("interactionMode"), features]
     revision = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
     project = (projects or {}).get(shell.get("projectId")) or {}
-    title = shell.get("title") or "T3 conversation"
+    title = shell.get("title") or tr(lang, "t3.untitled")
     return AgentState(
         key=AgentKey(server_id, shell["id"]),
         agent_type=(shell.get("modelSelection") or {}).get("instanceId")
@@ -211,7 +211,7 @@ def thread_state(server_id, shell, detail, projects, epoch, *, features, now, ar
         project=project.get("title") or "", repo=project.get("workspaceRoot") or "",
         branch=shell.get("branch") or "", display_agent="T3 Code", backend="t3",
         capabilities=(), backend_revision=revision, backend_actions=[],
-        preview=_preview(shell, detail, attention, life), lifecycle=life,
+        preview=_preview(shell, detail, attention, life, lang), lifecycle=life,
         activity=activity, attention=attention,
         completed_at=shell.get("latestRunCompletedAt") or "",
         state_labels={status.value: label} if label else {},

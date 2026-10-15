@@ -198,7 +198,7 @@ def test_plan_markdown_from_turn_item_and_preview():
     sh = {**sh, "status": "completed", "activeRunId": None}
     s = thread_state("srv", sh, detail, projects, "e", features={}, now=NOW)
     assert (s.status, s.attention, s.state_labels) == (B, "plan", {"blocked": "PLAN READY"})
-    assert s.preview.startswith("Plan ready — choose how to implement it.\n# Pl")
+    assert s.preview.startswith("Plan ready — implement it, or reply to refine it.\n# Pl")
 
 
 def test_plan_markdown_via_matching_turn_item_when_plan_has_none():
@@ -253,3 +253,24 @@ def test_plan_fallback_first_matching_item_wins():
               "turnItems": [{"type": "proposed_plan", "planId": "p1", "markdown": "first"},
                             {"type": "proposed_plan", "planId": "p1", "markdown": "second"}]}
     assert active_plan(detail)["markdown"] == "first"
+
+
+def test_previews_follow_the_deck_language():
+    def cs(sh, detail=None):
+        return thread_state("srv", sh, detail, {}, "e1", features={}, now=NOW, lang="cs")
+    assert cs(shell(status="failed", lastError="boom")).preview == "Chyba T3: boom"
+    assert cs(shell(status="failed")).preview == "Chyba T3: Poslední běh selhal. Podrobnosti najdeš v T3."
+    hi = {"turnItems": [{"type": "assistant_message", "text": "hi"}]}
+    assert cs(shell(settledOverride="settled"), hi).preview == "Uzavřené vlákno.\nhi"
+    assert cs(shell(pendingRuntimeRequest=REQ)).preview == "Žádost o schválení"
+    assert cs(shell(pendingRuntimeRequest={**REQ, "kind": "user_input"})).preview == (
+        "Odpověz v T3 — podrobnosti nejsou k dispozici.")
+    assert cs(shell(title=None)).label == "Konverzace T3"
+    sh, _ = fx_shell("input")
+    dead = {**fx_detail("input"), "runtimeRequests": []}
+    assert cs(sh, dead).preview.startswith("Odpověz v T3 — tento formulář potřebuje celé rozhraní konverzace.\n")
+    sh, _ = fx_shell("plan")
+    plan = cs({**sh, "status": "completed", "activeRunId": None}, fx_detail("plan"))
+    assert plan.preview.startswith("Plán je připravený — spusť ho, nebo ho odpovědí uprav.\n# Pl")
+    # English stays the default, and the revision does not depend on the language.
+    assert run(shell(status="failed")).backend_revision == cs(shell(status="failed")).backend_revision
