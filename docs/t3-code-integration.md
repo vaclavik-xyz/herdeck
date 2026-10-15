@@ -98,7 +98,7 @@ excepted). Commands are built in `src/herdeck/t3_actions.py`.
 | Approve / Approve for session / Approve always / Deny | approval request that is still live; one action per option T3 lists (session and always need a second press) | `runtime-request.respond` with `decision` |
 | Answer | user-input request that is live and has a single question without multi-select; one action per option | `runtime-request.respond` with `answers` |
 | Stop | a run is active | `run.interrupt` (`holdQueue: true`) |
-| Reply | status IDLE or DONE | `message.dispatch`, 1 to 4096 characters |
+| Reply | status IDLE or DONE, or PLAN READY | `message.dispatch`, 1 to 4096 characters; on PLAN READY the thread stays in plan mode and the reply refines the plan (no `sourcePlanRef`), as T3's own plan follow-up does |
 | Implement plan (confirm) | PLAN READY with an active plan | `thread.interaction-mode.set` to `default`, then `message.dispatch` with `PLEASE IMPLEMENT THIS PLAN:` and the plan (up to 120000 characters) |
 | Mark seen | DONE and `threadVisitedTracking` | `thread.visit` with the completion time |
 | Settle / Reopen | `threadSettlement`; Settle on idle, done or failed threads | `thread.settle` / `thread.unsettle` |
@@ -109,10 +109,11 @@ itself is queued after the run (`queue_after_active`).
 
 ## Delivery rules
 
-Every press re-reads the thread and must carry the revision the deck showed
-and an action that is still offered, otherwise the connector answers "Stale or
-already submitted T3 action". Each command gets a `commandId` that is
-remembered per thread, revision, action, payload and reply text.
+Every press re-reads the thread and must carry an action that is still
+offered ("T3 action is not available" otherwise, checked first) and the
+revision the deck showed ("Stale or already submitted T3 action" otherwise).
+Each command gets a `commandId` that is remembered per thread, revision,
+action, payload and reply text.
 
 - Transport failure: the same command is retried once after one second.
 - Still failing: the result is uncertain. The tile stays read-only until the

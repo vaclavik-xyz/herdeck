@@ -314,10 +314,10 @@ class T3Connector:
             raise T3Error("T3 detail is stale; controls disabled")
         revision, caps, actions, shell, detail = offer
         action = msg.get("action")
-        if msg.get("revision") != revision:
-            raise T3Error("Stale or already submitted T3 action")
         if action not in caps:
             raise T3Error("T3 action is not available")
+        if msg.get("revision") != revision:
+            raise T3Error("Stale or already submitted T3 action")
         payload = {}
         if action not in ("stop", "continue"):
             wanted = json.dumps(msg.get("payload"), sort_keys=True)

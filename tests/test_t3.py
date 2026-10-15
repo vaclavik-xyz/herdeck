@@ -609,6 +609,30 @@ async def test_implement_plan_stops_after_a_rejected_first_command():
 
 
 @pytest.mark.asyncio
+async def test_a_reply_to_a_ready_plan_is_one_plan_mode_message():
+    client = FakeClient(thread("plan", status="completed"))
+    tid = tid_of("plan")
+    h = Harness(client)
+    await h.c.refresh()
+    assert "continue" in h.state(tid).capabilities
+    await h.press(tid, "continue", text="Drop step 3")
+    [cmd] = client.commands
+    assert cmd["type"] == "message.dispatch" and cmd["text"] == "Drop step 3"
+    assert "sourcePlanRef" not in cmd
+    assert h.results[-1]["accepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_action_is_reported_before_the_revision():
+    client = FakeClient(thread("running"))
+    h = Harness(client)
+    await h.c.refresh()
+    await h.press(tid_of("running"), "continue", text="hi", revision="old")
+    assert client.commands == []
+    assert h.results[-1] == {"ok": False, "skipped": True, "message": "T3 action is not available"}
+
+
+@pytest.mark.asyncio
 async def test_continue_with_overlong_text_is_skipped():
     client = FakeClient(thread("completed"))
     h = Harness(client)
@@ -695,3 +719,21 @@ async def test_mixed_deck_routes_t3_choice_without_terminal_keys():
     assert cmd.kind == "backend_action" and cmd.server_id == "t3"
     assert cmd.payload == {"requestId": "req-approval-1", "decision": "accept"}
     assert cmd.keys == [] and cmd.terminal_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_ready_plan_drill_offers_implement_and_the_reply_macros():
+    from herdeck.config import DEFAULT_PROFILES
+    config = Config(servers=[ServerConfig("t3", "http://127.0.0.1:3773", "x", "t3")],
+                    profiles=dict(DEFAULT_PROFILES), overview_order=["t3"], grid=(5, 3))
+    orch = Orchestrator(config)
+    h = Harness(FakeClient(thread("plan", status="completed")))
+    await h.c.refresh()
+    t3 = h.state(tid_of("plan"))
+    orch.apply_snapshot("t3", [t3])
+    orch._drill = t3.key
+    actions, _, _ = orch._drill_layout()
+    assert actions[0]["id"] == "implement_plan"
+    reply = next(a for a in actions if "id" not in a)
+    cmd = reply["make"](t3.key)
+    assert cmd.kind == "backend_action" and cmd.action == "continue" and cmd.text

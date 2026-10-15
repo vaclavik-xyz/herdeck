@@ -92,7 +92,9 @@ def capabilities(state, shell, actions):
     caps = ["read"]
     if shell.get("activeRunId") and active:
         caps.append("stop")
-    if active and state.status in (Status.IDLE, Status.DONE):
+    # A reply to a ready plan stays in plan mode and refines it (T3's plan
+    # follow-up); only implement_plan switches the thread to default mode.
+    if active and (state.status in (Status.IDLE, Status.DONE) or state.attention == "plan"):
         caps.append("continue")
     caps.extend(a["id"] for a in actions)
     return tuple(dict.fromkeys(caps))

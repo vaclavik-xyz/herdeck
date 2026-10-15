@@ -298,3 +298,18 @@ def test_live_file_change_approval_maps_to_default_approve_deny():
     assert [a["payload"] for a in actions] == [
         {"requestId": rid, "decision": "accept"},
         {"requestId": rid, "decision": "decline"}]
+
+
+def test_a_ready_plan_accepts_a_reply_that_stays_in_plan_mode():
+    # T3's plan follow-up: a typed reply refines the plan (interactionMode stays "plan",
+    # no sourceProposedPlan); only Implement plan switches to default mode.
+    shell = dict(fx("shell_plan")["threads"][0], status="completed")
+    detail = fx("detail_plan")["projection"]
+    state = thread_state("s", shell, detail, {}, 0, features=ALL, now=NOW)
+    assert state.attention == "plan"
+    caps = capabilities(state, shell, thread_actions(state, shell, detail, ALL, NOW))
+    assert "continue" in caps and "implement_plan" in caps
+    [msg] = build_commands("continue", {}, shell, detail, ALL, text="Split step 2", now_iso="x")
+    assert msg["type"] == "message.dispatch" and msg["text"] == "Split step 2"
+    assert "sourcePlanRef" not in msg
+    assert capabilities(replace(state, lifecycle="snoozed"), shell, []) == ("read",)
