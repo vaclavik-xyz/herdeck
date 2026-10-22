@@ -342,6 +342,15 @@ pass/fail checklist with hints (it never prints token values). It also compares
 versions: the running runtime against this install, and every bridge against
 the runtime, and asks each bridge whether herdr answers it.
 
+For T3 servers it reads each one's public `/.well-known/t3/environment`
+descriptor and lists the environment it reaches (label and `environmentId`).
+Two advisory warnings, marked `!` (they do not fail doctor): a T3 server runs on
+this machine (`~/.t3/userdata/server-runtime.json`) but no configured server
+reaches its environment — with the `python -m herdeck.t3_setup --id <id>`
+command to connect it — and two configured servers reach the same environment,
+which shows every thread twice. Doctor only looks at this machine; T3 on other
+machines is found only through servers you configure.
+
 When the deck goes dark, the runtime's token-gated `GET /health` says why: its
 `version`, `protocol`, `pid` and `uptime_s`; `config_error` when the config
 does not load; per server under `servers`

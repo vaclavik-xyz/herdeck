@@ -21,19 +21,12 @@ import tomli_w
 from .secrets import clear_secret, get_secret, peek_keychain, set_secret
 from .settings import SettingsSnapshot, _merged_sections, resolve_profile
 from .t3_actions import Incompatible, negotiate
-from .t3_client import T3Client, T3Http
+from .t3_client import T3Client, T3Http, local_runtime_origin
 
 
 def discover(base_dir: Path) -> str:
-    state = json.loads((base_dir / "userdata/server-runtime.json").read_text())
-    host, port = state["host"], state["port"]
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
-    if ":" in host:
-        host = f"[{host}]"
-    url = f"http://{host}:{port}"
-    T3Http(url, "")  # Validate discovery before any credential leaves the process.
-    return url
+    # Validated before any credential leaves the process.
+    return local_runtime_origin(base_dir)
 
 
 def updated_config(data: dict, sid: str, url: str, token_env: str, profile="default") -> dict:

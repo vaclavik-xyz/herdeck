@@ -238,4 +238,12 @@ re-fetch keeps the icon already shown.
   127.0.0.1:13773:127.0.0.1:3773 <user>@<host>`, server URL
   `http://127.0.0.1:13773`). Renewal then uses `--issuer-ssh`.
 
+`herdeck-doctor` identifies environments by the descriptor's `environmentId`
+(fetched without a credential, 2 s timeout), not by URL, so a tunnel URL and
+the server's own origin count as the same server. It warns when the T3 server
+on this machine (from `~/.t3/userdata/server-runtime.json` `origin`, or the
+older `host` + `port`) answers but no configured server reaches its
+environment, and when two configured servers reach the same environment
+(every thread would get two tiles). It does not probe other hosts.
+
 See [agent-setup.md](agent-setup.md#dedicated-t3-transport-and-renewal-macos).

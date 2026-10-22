@@ -53,7 +53,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class T3Http:
-    def __init__(self, url: str, token: str):
+    def __init__(self, url: str, token: str, *, timeout: float = _TIMEOUT):
         p = urlsplit(url)
         try:
             ip = ipaddress.ip_address(p.hostname or "")
@@ -66,15 +66,18 @@ class T3Http:
             raise ValueError("T3 requires a clean HTTPS origin or loopback/Tailscale HTTP origin")
         self.url = url.rstrip("/")
         self._token = token
+        self._timeout = timeout
         self._opener = build_opener(ProxyHandler({}), _NoRedirect())
 
     def _raw(self, path, method, limit=_LIMIT):
         """(Content-Type, body) of a response of at most ``limit`` bytes."""
+        headers = {"x-t3-orchestration-protocol": str(PROTOCOL)}
+        if self._token:  # the descriptor is public; never send an empty bearer
+            headers["Authorization"] = "Bearer " + self._token
         req = Request(self.url + path, method=method, data=b"" if method == "POST" else None,
-                      headers={"Authorization": "Bearer " + self._token,
-                               "x-t3-orchestration-protocol": str(PROTOCOL)})
+                      headers=headers)
         try:
-            with self._opener.open(req, timeout=_TIMEOUT) as response:
+            with self._opener.open(req, timeout=self._timeout) as response:
                 ctype = response.headers.get("Content-Type", "")
                 raw = response.read(limit + 1)
         except HTTPError as exc:
@@ -100,6 +103,30 @@ class T3Http:
 
     def post(self, path):
         return self._request(path, "POST")
+
+
+def local_runtime_origin(base_dir) -> str:
+    """HTTP origin of the T3 server running on this machine, from
+    ``<base_dir>/userdata/server-runtime.json``. Current T3 writes ``origin``
+    (and ``port``); older builds wrote ``host`` + ``port``. Raises OSError /
+    ValueError / KeyError when the file is absent or unusable."""
+    from pathlib import Path
+
+    state = json.loads((Path(base_dir) / "userdata/server-runtime.json").read_text())
+    if not isinstance(state, dict):
+        raise ValueError("server-runtime.json is not an object")
+    origin = state.get("origin")
+    if isinstance(origin, str) and origin:
+        url = origin.rstrip("/")
+    else:
+        host, port = state.get("host") or "127.0.0.1", state["port"]
+        if host in ("0.0.0.0", "::"):
+            host = "127.0.0.1"
+        if ":" in host:
+            host = f"[{host}]"
+        url = f"http://{host}:{port}"
+    T3Http(url, "")  # validate before anything is sent to it
+    return url
 
 
 def _rejection(cause) -> str:
