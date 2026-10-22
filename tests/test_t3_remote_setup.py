@@ -232,6 +232,13 @@ def test_token_file_rollback_removes_the_file_and_revokes(env, tmp_path):
     assert env.fake.issuer_ops == [("issue", None), ("revoke", "sess-r")]
 
 
+def test_relative_token_file_is_recorded_absolute(env, monkeypatch, capsys):
+    monkeypatch.chdir(env.tmp)
+    t3_setup.connect(_args(env, token_file="creds/m4"))
+    recorded = tomllib.loads(env.path.read_text())["servers"][1]["token_file"]
+    assert recorded == str(env.tmp / "creds/m4") and (env.tmp / "creds/m4").exists()
+
+
 def test_token_file_refuses_an_existing_file_before_issuing(env, tmp_path):
     token = tmp_path / "taken"
     token.write_text("someone-else\n")

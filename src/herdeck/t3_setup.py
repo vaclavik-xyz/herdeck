@@ -89,8 +89,9 @@ class _Plan:
             # A token file needs no Keychain: setup works over SSH and an
             # ad-hoc signed runtime reads it without an access prompt.
             self.env = None
+            # Absolute: the runtime and the renew agent run with another cwd.
             self.token_file = (Path(os.path.expanduser(token_file)) if token_file
-                               else path.with_name(args.id + "-token"))
+                               else path.with_name(args.id + "-token")).absolute()
             if self.token_file.exists():
                 raise ValueError(f"Token file {self.token_file} already exists; choose another path or ID")
         else:
