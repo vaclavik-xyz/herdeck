@@ -55,6 +55,55 @@ def test_renew_preserves_identity_and_old_access_on_failure(tmp_path, monkeypatc
     assert path.read_text() == original
 
 
+@pytest.mark.parametrize("case", ["renew", "verify_failure", "restart_failure", "unsafe_mode", "missing"])
+def test_renew_rewrites_the_token_file_the_runtime_reads_first(tmp_path, monkeypatch, capsys, case):
+    token = tmp_path / "t3-token"
+    if case != "missing":
+        token.write_text("old-private\n")
+        token.chmod(0o644 if case == "unsafe_mode" else 0o600)
+    path = tmp_path / "config.toml"
+    original = (f'[[servers]]\nid="t3"\nbackend="t3"\nurl="http://127.0.0.1:3773"\n'
+                f'token_env="TEST_T3_TOKEN"\ntoken_file="{token}"\n')
+    path.write_text(original)
+    monkeypatch.delenv("TEST_T3_TOKEN", raising=False)
+    keychain = []
+    monkeypatch.setattr(t3_renew, "peek_keychain", lambda name: keychain.append(name))
+    monkeypatch.setattr(t3_renew, "set_secret", lambda name, value: keychain.append(name))
+    calls = []
+    def issue(args, operation, session_id=None):
+        calls.append(operation)
+        return dict(token="new-private", sessionId="new-id", expiresAt="2026-10-06T12:00:00Z")
+    monkeypatch.setattr(t3_renew, "issuer", issue)
+    def get(http, route):
+        if route.endswith("environment"):
+            return {"orchestrationProtocolVersion": 2, "capabilities": {}}
+        if route.endswith("/session"):
+            return dict(expiresAt="2020-01-01T00:00:00Z")
+        if case == "verify_failure":
+            raise t3_renew.T3Error("Rejected", 401)
+        return dict(threads=[], archivedThreads=[], projects=[])
+    monkeypatch.setattr(t3_renew.T3Http, "get", get)
+    def run(*a, **kw):
+        if case == "restart_failure":
+            raise OSError("launchd unavailable")
+    monkeypatch.setattr(t3_renew.subprocess, "run", run)
+    args = argparse.Namespace(config=path, id="t3", restart_label="dev.herdeck.runtime")
+    if case == "renew":
+        t3_renew.renew(args)
+        assert "private" not in capsys.readouterr().out
+        assert token.read_text() == "new-private\n"
+        assert (token.stat().st_mode & 0o777) == 0o600
+    else:
+        with pytest.raises((t3_renew.T3Error, OSError, ValueError)):
+            t3_renew.renew(args)
+        if case != "missing":
+            assert token.read_text() == "old-private\n"
+        assert calls == (["issue", "revoke"] if case.endswith("failure") else [])
+    assert keychain == []  # The file is the credential; the Keychain is not touched.
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+    assert path.read_text() == original
+
+
 def _fake(tmp_path, version, exe=False, legacy=False):
     vdir = tmp_path / "runtime/versions" / version
     vdir.mkdir(parents=True)

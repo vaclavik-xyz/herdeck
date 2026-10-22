@@ -831,7 +831,15 @@ source; reinstall it after deploying a new source. It refuses to overwrite an
 existing `com.herdeck.t3-renew` plist: boot out and delete an older per-server
 job first. `--renew-all` prints one JSON line per server (never tokens) and a
 summary; one failure does not stop the others; it exits 1 if any server or the
-restart failed. Servers with only `token_file` are skipped (renew them by hand).
+restart failed.
+
+Renewal writes the new token where the runtime reads it: the server's
+`token_file` when one is set (the runtime prefers it to the Keychain; written
+atomically, mode 0600), else the Keychain entry named `token_env`. An
+unattended runtime is better off with a `token_file` next to `token_env`: an
+unsigned or ad-hoc-signed local build is a new app to the Keychain after every
+rebuild, and while the Mac sleeps with the display off ("dark wake") macOS
+cannot show the access prompt, so the runtime reads no token at all.
 A failed restart keeps the already-validated new credentials; the next runtime
 restart adopts them. `com.herdeck.app` is a hand-made runtime label; a runtime
 installed with `herdeck-service install runtime` uses `dev.herdeck.runtime`.

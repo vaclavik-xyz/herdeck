@@ -43,6 +43,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agent card and done notifications follow suit.
 
 ### Fixed
+- T3 token renewal (`--renew`, `--renew-all`) renews a server's `token_file`
+  when it has one, which the runtime reads before the Keychain; it used to
+  renew only the Keychain entry (leaving the runtime on the old token) or skip
+  file-only servers.
 - `python -m herdeck.t3_setup` discovers the local T3 server from the
   `origin` that current T3 writes to `server-runtime.json` (it required the
   older `host` key and failed).

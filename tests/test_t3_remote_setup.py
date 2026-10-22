@@ -259,11 +259,14 @@ def _renew_env(tmp_path, monkeypatch, sessions, fail=()):
     path = tmp_path / "config.toml"
     servers = "".join(
         f'[[servers]]\nid = "{sid}"\nurl = "http://127.0.0.1:{port}"\nbackend = "t3"\n'
-        + (f'token_env = "TOK_{port}"\n' if sid != "filed" else 'token_file = "~/t"\n')
+        + (f'token_env = "TOK_{port}"\n' if sid != "filed" else f'token_file = "{tmp_path / "filed-token"}"\n')
         + (f'issuer_ssh = "{TARGET}"\n' if sid == "remote" else "")
         for sid, port in (("remote", 13774), ("local", 13773), ("fresh", 13775), ("filed", 13776)))
     path.write_text('[[servers]]\nid = "herdr"\nurl = "ws://x"\ntoken_env = "H"\n' + servers)
     secrets = {f"TOK_{p}": f"old-{p}" for p in (13773, 13774, 13775)}
+    filed = tmp_path / "filed-token"
+    filed.write_text("old-13776\n")
+    filed.chmod(0o600)
     monkeypatch.setattr(t3_renew, "peek_keychain", secrets.get)
     monkeypatch.setattr(t3_renew, "set_secret", lambda k, v: secrets.update({k: v}))
     issued = []
@@ -289,7 +292,7 @@ def _renew_env(tmp_path, monkeypatch, sessions, fail=()):
 
 def _sessions():
     soon, later = "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z"
-    return {f"http://127.0.0.1:{p}": (later if p == 13775 else soon) for p in (13773, 13774, 13775)}
+    return {f"http://127.0.0.1:{p}": (later if p == 13775 else soon) for p in (13773, 13774, 13775, 13776)}
 
 
 def test_renew_all_mixed_results_restart_once_and_exit_nonzero(tmp_path, monkeypatch, capsys):
@@ -304,11 +307,15 @@ def test_renew_all_mixed_results_restart_once_and_exit_nonzero(tmp_path, monkeyp
     assert by_id["remote"]["renewed"] is True
     assert by_id["local"]["renewed"] is False and "error" in by_id["local"]
     assert by_id["fresh"] == {"server_id": "fresh", "renewed": False, "expires_at": "2099-01-01T00:00:00Z"}
-    assert "skipped" in by_id["filed"] and "herdr" not in by_id
-    assert lines[-1]["summary"] == {"servers": 4, "renewed": ["remote"], "ok": False, "runtime_restarted": True}
+    assert by_id["filed"]["renewed"] is True and "herdr" not in by_id
+    assert lines[-1]["summary"] == {"servers": 4, "renewed": ["remote", "filed"], "ok": False, "runtime_restarted": True}
     # Remote via its recorded issuer_ssh, local via the local CLI; the failure revoked its own session.
-    assert issued == [("remote", TARGET, "issue"), ("local", None, "issue"), ("local", None, "revoke")]
+    assert issued == [("remote", TARGET, "issue"), ("local", None, "issue"), ("local", None, "revoke"),
+                      ("filed", None, "issue")]
     assert secrets == {"TOK_13773": "old-13773", "TOK_13774": "new-remote", "TOK_13775": "old-13775"}
+    # A token_file server is renewed in its file (what the runtime reads first), owner-only.
+    filed = tmp_path / "filed-token"
+    assert filed.read_text() == "new-filed\n" and (filed.stat().st_mode & 0o777) == 0o600
     assert len(restarts) == 1 and restarts[0][-1].endswith("/dev.herdeck.runtime")
 
 
@@ -332,7 +339,7 @@ def test_renew_all_restart_failure_is_reported_and_keeps_new_credentials(tmp_pat
                               base_dir=tmp_path, binary=None)
     assert t3_renew.renew_all(args) is False
     summary = json.loads(capsys.readouterr().out.splitlines()[-1])["summary"]
-    assert summary["renewed"] == ["remote", "local"] and summary["restart_error"] == "OSError"
+    assert summary["renewed"] == ["remote", "local", "filed"] and summary["restart_error"] == "OSError"
     assert secrets["TOK_13773"] == "new-local" and secrets["TOK_13774"] == "new-remote"
 
 
