@@ -58,6 +58,8 @@ def create_connector(server, *, language="en", **kwargs):
     if server.backend == "t3":
         from .t3 import T3Connector
         return T3Connector(server, language=language, **kwargs)
+    # Only a T3 server has a descriptor label; a herdr bridge never reports one.
+    kwargs.pop("on_server_label", None)
     return Connector(server, **kwargs)
 
 

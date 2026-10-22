@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import time
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 
@@ -56,6 +57,8 @@ _DELIVERY_MEMORY = 256
 _ICON_RECHECK_S = 1800.0
 _ICON_RETRY_S = 600.0
 _read_state_warned = False
+# The descriptor label is a display name the deck may show as a tile tag.
+_LABEL_MAX = 32
 
 
 class _IncompatibleServer(T3Error):
@@ -71,6 +74,23 @@ def _warn_read_state(server):
         log.warning(READ_STATE_OBSOLETE)
 
 
+def descriptor_label(descriptor) -> str | None:
+    """The server's own display name (``label`` of ``/.well-known/t3/environment``,
+    e.g. "Jupiter-M4mini"), sanitized: it comes from the network, so only a
+    string counts, control/format characters are dropped, whitespace runs
+    collapse and the result is bounded. None when absent or blank."""
+    value = descriptor.get("label") if isinstance(descriptor, dict) else None
+    if not isinstance(value, str):
+        return None
+    text = "".join(
+        " " if ch.isspace() else ch
+        for ch in value[: _LABEL_MAX * 4]
+        if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co", "Cn")
+    )
+    text = " ".join(text.split())[:_LABEL_MAX].strip()
+    return text or None
+
+
 def _connect_error(exc):
     if isinstance(exc, _IncompatibleServer):
         return str(exc)
@@ -84,7 +104,8 @@ class T3Connector:
     capabilities = frozenset()
 
     def __init__(self, server, on_snapshot, on_event, on_connection, on_result=None,
-                 on_error=None, *, client=None, language="en", on_project_icon=None, **kwargs):
+                 on_error=None, *, client=None, language="en", on_project_icon=None,
+                 on_server_label=None, **kwargs):
         self.server = server
         # [view].language of the deck; a config reload rebuilds the connector.
         self._lang = language
@@ -94,6 +115,11 @@ class T3Connector:
         self._on_result = on_result or (lambda *args: None)
         self._on_error = on_error or (lambda *args: None)
         self._on_project_icon = on_project_icon
+        # (server_id, label|None): the descriptor's display name, reported
+        # once per change (outside the delivery lock) as a tile-tag fallback.
+        self._on_server_label = on_server_label
+        self.server_label = None  # sanitized descriptor label, see descriptor_label()
+        self._reported_label = None
         # (workspaceRoot, faviconPath) -> (icon hash or "", checked at): the
         # favicon T3 resolves for a project, fetched outside the lock.
         self._icons = {}
@@ -175,6 +201,7 @@ class T3Connector:
                 self.last_connect_error = str(exc)
                 raise _IncompatibleServer(str(exc)) from None
             self._features = features
+            self.server_label = descriptor_label(descriptor)
         shell = await asyncio.to_thread(self.client.shell)
         projects = {p["id"]: p for p in shell["projects"]
                     if isinstance(p, dict) and isinstance(p.get("id"), str)}
@@ -289,6 +316,7 @@ class T3Connector:
                 self.last_connect_error = None
                 self._set_connected(True)
                 online = True
+                self._report_label()
                 await self._sync_icons()
             except (T3Error, *_MALFORMED) as exc:
                 if getattr(exc, "code", None) is not None:
@@ -303,6 +331,12 @@ class T3Connector:
             await asyncio.sleep(self._interval)
         self._connected = False
         self._on_connection(self.server.id, False)
+
+    def _report_label(self):
+        if self._on_server_label is None or self.server_label == self._reported_label:
+            return
+        self._reported_label = self.server_label
+        self._on_server_label(self.server.id, self.server_label)
 
     # --- project favicons ---------------------------------------------------
 

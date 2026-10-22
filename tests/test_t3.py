@@ -965,3 +965,81 @@ async def test_a_malformed_favicon_answer_never_takes_the_connection_down():
     await h.run_rounds(3)
     assert h.connections[:3] == [("t3", True)] * 3  # then the shutdown's False
     assert icons == [] and client.favicon_calls == [("/Users/dev/proj", None)]  # retried later, not every poll
+
+
+# --- descriptor label ------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Jupiter-M4mini", "Jupiter-M4mini"),
+    ("  Neptun\tA3112 \n", "Neptun A3112"),
+    ("evil\x1b[31mred\x07", "evil[31mred"),
+    ("rtl‮abc", "rtlabc"),
+    ("x" * 200, "x" * 32),
+    ("   ", None),
+    ("\x00\x01", None),
+    (42, None),
+    (None, None),
+    (["Jupiter"], None),
+])
+def test_descriptor_label_is_sanitized(raw, expected):
+    assert t3mod.descriptor_label({"label": raw}) == expected
+
+
+def test_descriptor_label_tolerates_a_non_dict_descriptor():
+    assert t3mod.descriptor_label(["label"]) is None
+    assert t3mod.descriptor_label({}) is None
+
+
+async def test_the_connector_reports_the_descriptor_label_once_per_change():
+    client = FakeClient(thread("completed"))
+    client.desc["label"] = " Jupiter-M4mini\x1b "
+    client.shell_script = [None, None, T3Error("down"), None]
+    labels = []
+    h = Harness(client, on_server_label=lambda sid, label: labels.append((sid, label)))
+    await h.run_rounds(4)
+    assert client.descriptor_calls == 2 and h.c.server_label == "Jupiter-M4mini"
+    assert labels == [("t3", "Jupiter-M4mini")]  # re-negotiated after the drop, unchanged
+
+
+def test_a_herdr_connector_never_gets_the_label_callback():
+    from herdeck.connector import Connector, create_connector
+
+    def cb(*a):
+        return None
+    herdr = create_connector(ServerConfig("h", "ws://h", "x"), on_snapshot=cb, on_event=cb,
+                             on_connection=cb, on_server_label=cb)
+    assert isinstance(herdr, Connector)
+
+
+def test_the_live_source_feeds_descriptor_labels_into_the_tile_tags():
+    from herdeck.config import DEFAULT_PROFILES
+    from herdeck.deckapp.live import build_live_source
+
+    wired = {}
+
+    class Runner:
+        def __init__(self, conn):
+            pass
+
+        def start(self):
+            pass
+
+    servers = [ServerConfig("t3-a", "http://127.0.0.1:3773", "x", "t3"),
+               ServerConfig("t3-b", "http://127.0.0.1:3774", "x", "t3")]
+    config = Config(servers=servers, profiles=dict(DEFAULT_PROFILES),
+                    overview_order=["t3-a", "t3-b"], grid=(5, 3))
+    config.view.tile_fields = [*config.view.tile_fields, "server"]
+    source = build_live_source(
+        config,
+        connector_factory=lambda server, **kw: wired.setdefault(server.id, kw["on_server_label"]),
+        runner_factory=Runner,
+    )
+    wired["t3-b"]("t3-b", "Jupiter-M4mini")  # before any orchestrator: buffered
+    orch = Orchestrator(config, slots=13)
+    source.apply_to(orch)
+    for sid in ("t3-a", "t3-b"):
+        orch.apply_snapshot(sid, [AgentState(AgentKey(sid, "p"), "codex", sid, Status.IDLE,
+                                             backend="t3")])
+    tags = {t.repo: t.server_tag for t in orch.render().tiles if t.repo}
+    assert tags == {"t3-a": "T3", "t3-b": "Jupiter-M4mini"}

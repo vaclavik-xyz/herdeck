@@ -303,6 +303,9 @@ class LiveSource(
         self._preread: dict[AgentKey, str] = {}
         self._preread_req: dict[AgentKey, str] = {}
         self._orch: Orchestrator | None = None
+        # server id -> self-reported display name (T3 descriptor label),
+        # replayed into every orchestrator this source is wired to.
+        self._server_labels: dict[str, str] = {}
         self._deck_lock = None
         self._refresh_locked_cb = None
         self._runners: dict[str, object] = {}
@@ -394,6 +397,7 @@ class LiveSource(
         self._orch = orch
         self._deck_lock = lock
         self._refresh_locked_cb = refresh_locked
+        self._replay_server_labels(orch)
 
     def attach_runner(self, runner, server_id: str | None = None) -> None:
         """Receive a connector runner (provides fire-and-forget ``send``).
@@ -405,8 +409,15 @@ class LiveSource(
             # Answers leave stamped with the bridge episode (live_events.py).
             self._runners[sid] = self._wrap_runner(sid, runner)
 
+    def _replay_server_labels(self, orch: Orchestrator) -> None:
+        with self._lock:
+            labels = dict(self._server_labels)
+        for sid, label in labels.items():
+            orch.set_server_label(sid, label)
+
     def apply_to(self, orch: Orchestrator) -> None:
         self._orch = orch
+        self._replay_server_labels(orch)
         with self._lock:
             states = list(self._agents.values())
             connected = dict(self._connected)
@@ -1672,6 +1683,21 @@ class LiveSource(
         if ingest_project_icon(icon):
             self._apply(lambda: True)
 
+    def _on_server_label(self, server_id: str, label: str | None) -> None:
+        """Connector callback (runner thread): a T3 server's descriptor label
+        changed; re-render so the tile tags pick it up."""
+        with self._lock:
+            if label:
+                self._server_labels[server_id] = label
+            else:
+                self._server_labels.pop(server_id, None)
+
+        def mutate():
+            orch = self._orch
+            return orch.set_server_label(server_id, label) if orch is not None else False
+
+        self._apply(mutate)
+
     def _apply(self, mutate) -> None:
         """Run a state transition (and render it) atomically w.r.t. presses.
 
@@ -1923,6 +1949,7 @@ def build_live_source(
             on_connection=source._on_connection,
             on_result=lambda req, data, sid=selected.id: source._on_result(sid, req, data),
             on_project_icon=source._on_project_icon,
+            on_server_label=source._on_server_label,
             on_term=source._on_term,
             on_request_error=lambda req, message, sid=selected.id: source._on_bridge_error(
                 sid, req, message
