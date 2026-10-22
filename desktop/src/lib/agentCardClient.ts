@@ -45,6 +45,7 @@ export interface AgentDetail extends AgentRef {
   label: string;
   title: string;
   repo: string;
+  noProject: boolean; // a T3 thread created without a project (repo is T3's scratch dir)
   branch: string;
   workspace: string;
   tab: string;
@@ -160,6 +161,7 @@ export function parseDetail(raw: unknown): AgentDetail | null {
     label: str(v.label),
     title: str(v.title),
     repo: str(v.repo),
+    noProject: v.no_project === true,
     branch: str(v.branch),
     workspace: str(v.workspace),
     tab: str(v.tab),

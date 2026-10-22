@@ -47,6 +47,7 @@
       terminal_title: "Show or hide a read-only live view of the agent's pane",
       offline: "Server disconnected — actions are unavailable until it reconnects.",
       since: "for {since}",
+      no_project: "No project",
       "status.blocked": "blocked",
       "status.working": "working",
       "status.idle": "idle",
@@ -101,6 +102,7 @@
       terminal_title: "Zobrazí nebo skryje živý náhled panelu agenta (jen pro čtení)",
       offline: "Server je odpojený — akce nejsou dostupné, dokud se znovu nepřipojí.",
       since: "{since}",
+      no_project: "Bez projektu",
       "status.blocked": "blokován",
       "status.working": "pracuje",
       "status.idle": "nečinný",
@@ -276,7 +278,9 @@
     return key in m ? m[key] : detail?.status ?? "";
   });
   const place = $derived(
-    detail ? [detail.repo, detail.branch].filter(Boolean).join(" · ") : "",
+    detail
+      ? [detail.noProject ? m.no_project : detail.repo, detail.branch].filter(Boolean).join(" · ")
+      : "",
   );
   const where = $derived(
     detail ? [detail.workspace, detail.tab].filter(Boolean).join(" › ") : "",
