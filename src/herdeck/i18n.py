@@ -166,6 +166,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_ended_badge": "ENDED",
         # T3 Code tile previews and notices (t3_state._preview, t3.T3Connector)
         "t3.untitled": "T3 conversation",
+        # A thread created without a project (t3_state.is_no_project).
+        "t3.no_project": "No project",
         "t3.form_notice": "Answer in T3 — this form needs the full conversation UI.",
         "t3.input_unavailable": "Answer in T3 — details unavailable.",
         "t3.approval_requested": "Approval requested",
@@ -316,6 +318,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "web.term_connecting_badge": "PŘIPOJUJI",
         "web.term_ended_badge": "UKONČENO",
         "t3.untitled": "Konverzace T3",
+        "t3.no_project": "Bez projektu",
         "t3.form_notice": "Odpověz v T3 — tento formulář potřebuje celé rozhraní konverzace.",
         "t3.input_unavailable": "Odpověz v T3 — podrobnosti nejsou k dispozici.",
         "t3.approval_requested": "Žádost o schválení",

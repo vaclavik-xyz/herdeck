@@ -215,6 +215,28 @@ configured `[[servers]].label`; a single T3 server keeps the `T3` tag. The
 deck's offline note and launcher line name a server by its configured label or
 its id, never by the descriptor label.
 
+## Project-less threads
+
+T3 files a thread created without a project under an ordinary project (titled
+"No project" in English T3) whose `workspaceRoot` is T3's scratch dir
+(`<home>/.t3/scratch`) and whose `repositoryIdentity` is null.
+`t3_state.is_no_project` detects it from exactly that: no repository identity
+and a workspace root that is a `scratch` dir directly under a `.t3` dir. A
+thread whose `projectId` is missing or names no project in the shell counts as
+project-less too. The bucket's title is never read (T3 may localize it), and a
+git repository inside the scratch dir is a project like any other.
+
+Such a thread gets `AgentState.no_project = True` and `project` = Herdeck's own
+localized label ("No project" / "Bez projektu", `t3.no_project`). On the tile
+the thread title takes the project's (headline) place and the title/tab line
+shows the muted label instead of repeating the title. With `[view].tile_icon =
+"project"` or `"both"` the logo box shows Lucide's `message-square-dashed` in
+grey (what T3 shows for the bucket) instead of a monogram of the scratch path;
+a `[view.project_icons]` entry for the scratch path still wins. Done
+notifications use the same glyph, and the desktop agent card names the thread
+"No project" instead of showing the scratch path. Lucide `projectIcon` values
+of other projects are not rendered (they keep the favicon/monogram path).
+
 ## Known limits
 
 - A never-opened completed thread is not Done (same as T3).

@@ -28,6 +28,12 @@ describe("subagents", () => {
     expect(parseDetail({ server_id: "s", pane_id: "p" })?.subagents).toEqual([]);
   });
 
+  it("carries the project-less flag only when the runtime sets it", () => {
+    expect(parseDetail({ server_id: "s", pane_id: "p", no_project: true })?.noProject).toBe(true);
+    expect(parseDetail({ server_id: "s", pane_id: "p", no_project: "yes" })?.noProject).toBe(false);
+    expect(parseDetail({ server_id: "s", pane_id: "p" })?.noProject).toBe(false);
+  });
+
   it("formats durations and indents by depth", () => {
     expect(formatDuration(0)).toBe("0s");
     expect(formatDuration(59.9)).toBe("59s");

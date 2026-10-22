@@ -377,6 +377,7 @@ class AgentCardMixin:
             "label": agent.label,
             "title": agent.title,
             "repo": agent.repo,
+            "no_project": agent.no_project,
             "branch": agent.branch,
             "workspace": agent.workspace,
             "tab": agent.tab,

@@ -25,6 +25,7 @@ function detail(over: Partial<AgentDetail> = {}): AgentDetail {
     label: "herdeck",
     title: "Fix the build",
     repo: "herdeck",
+    noProject: false,
     branch: "main",
     workspace: "ws",
     tab: "tab",
@@ -104,6 +105,25 @@ describe("AgentCard", () => {
     setLang("en");
   });
   afterEach(() => vi.useRealTimers());
+
+  it("names a project-less T3 thread instead of showing T3's scratch dir", async () => {
+    const transport = fakeTransport({
+      detail: {
+        kind: "ok",
+        detail: detail({ backend: "t3", repo: "/Users/me/.t3/scratch", noProject: true, branch: "" }),
+      },
+    });
+    setLang("cs");
+    const { target, cleanup } = render({ transport, target: { index: 0 }, onClose: () => {} });
+    try {
+      await settle();
+      const metas = [...target.querySelectorAll("p.meta")].map((p) => p.textContent);
+      expect(metas).toContain("Bez projektu");
+      expect(target.textContent).not.toContain(".t3/scratch");
+    } finally {
+      cleanup();
+    }
+  });
 
   it("renders the full prompt, header and parsed options", async () => {
     const transport = fakeTransport();

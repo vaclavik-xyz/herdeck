@@ -250,6 +250,25 @@ def _preview(shell, detail, attention, life, lang):
     return text[:PREVIEW_LIMIT]
 
 
+def is_no_project(project) -> bool:
+    """True for the bucket T3 files a thread created without a project under.
+
+    T3 models it as an ordinary project titled "No project" (the title may be
+    localized, so it is never read): no repository identity and a workspace
+    root that is T3's scratch dir (``<home>/.t3/scratch``). A thread whose
+    project is missing or unknown counts as project-less too.
+    """
+    if not isinstance(project, dict) or not project:
+        return True
+    if project.get("repositoryIdentity"):
+        return False
+    root = project.get("workspaceRoot")
+    if not isinstance(root, str):
+        return False
+    parts = [p for p in root.replace("\\", "/").split("/") if p]
+    return len(parts) >= 2 and parts[-2] == ".t3" and parts[-1] == "scratch"
+
+
 def thread_state(server_id, shell, detail, projects, epoch, *, features, now, archived=False, lang="en"):
     life = lifecycle(shell, now, archived)
     status, attention, label, activity = classify(shell, now, life)
@@ -264,6 +283,7 @@ def thread_state(server_id, shell, detail, projects, epoch, *, features, now, ar
                 shell.get("lastVisitedAt"), shell.get("interactionMode"), features]
     revision = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
     project = (projects or {}).get(shell.get("projectId")) or {}
+    no_project = is_no_project(project)
     title = shell.get("title") or tr(lang, "t3.untitled")
     # Not part of the revision: no action depends on the subagent list.
     subagents, running, total = thread_subagents(detail)
@@ -272,7 +292,10 @@ def thread_state(server_id, shell, detail, projects, epoch, *, features, now, ar
         agent_type=(shell.get("modelSelection") or {}).get("instanceId")
         or shell.get("providerInstanceId") or "default",
         label=title, title=title, status=status,
-        project=project.get("title") or "", repo=project.get("workspaceRoot") or "",
+        # A project-less thread gets Herdeck's own localized label, not T3's
+        # bucket title; layout.compose_line then headlines the thread title.
+        project=tr(lang, "t3.no_project") if no_project else project.get("title") or "",
+        repo=project.get("workspaceRoot") or "", no_project=no_project,
         branch=shell.get("branch") or "", display_agent="T3 Code", backend="t3",
         capabilities=(), backend_revision=revision, backend_actions=[],
         preview=_preview(shell, detail, attention, life, lang), lifecycle=life,
