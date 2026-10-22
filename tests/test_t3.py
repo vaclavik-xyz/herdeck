@@ -956,3 +956,12 @@ async def test_the_poll_loop_syncs_favicons_after_each_refresh():
     h, icons = _icon_harness(client)
     await h.run_rounds(3)
     assert len(icons) == 1 and h.state(tid_of("completed")).project_icon == icons[0].hash
+
+
+async def test_a_malformed_favicon_answer_never_takes_the_connection_down():
+    client = IconClient(thread("completed"))
+    client.favicons[("/Users/dev/proj", None)] = AttributeError("'list' object has no attribute 'get'")
+    h, icons = _icon_harness(client)
+    await h.run_rounds(3)
+    assert h.connections[:3] == [("t3", True)] * 3  # then the shutdown's False
+    assert icons == [] and client.favicon_calls == [("/Users/dev/proj", None)]  # retried later, not every poll

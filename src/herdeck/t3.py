@@ -338,17 +338,15 @@ class T3Connector:
                 continue
             try:
                 found = await self.client.project_favicon(*key)
-            except T3Error:
-                found = None
-                if entry and entry[0]:
-                    # A transient failure keeps the icon already shown.
-                    self._icons[key] = (entry[0], now)
-                    continue
-            digest = ""
-            if found is not None:
-                mime, data = found
-                digest = icon_hash(data)
-                self._on_project_icon(self.server.id, ProjectIcon(self.server.id, digest, mime, data))
+                digest = ""
+                if found is not None:
+                    mime, data = found
+                    digest = icon_hash(data)
+                    self._on_project_icon(self.server.id, ProjectIcon(self.server.id, digest, mime, data))
+            except (T3Error, *_MALFORMED):
+                # Never a connection failure: an odd asset answer only costs the
+                # icon, and a transient failure keeps the icon already shown.
+                digest = entry[0] if entry else ""
             self._icons[key] = (digest, now)
 
     # --- delivery ------------------------------------------------------------
