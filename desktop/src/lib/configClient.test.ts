@@ -307,6 +307,15 @@ describe("server mutations", () => {
     const next = updateServer(p, 0, "url", "http://127.0.0.1:3774");
     expect(serversOf(next)[0].desktop_read_state).toBe(true);
   });
+  it("keeps a T3 server's issuer_ssh through edits and drops it when cleared", () => {
+    const p = parseConfig(rawConfig())!;
+    p.base.servers = [{ id: "t3", url: "http://127.0.0.1:13773", token_env: "T3", backend: "t3", issuer_ssh: "admin@m4" }];
+    const edited = updateServer(p, 0, "url", "http://127.0.0.1:13774");
+    expect(serversOf(edited)[0].issuer_ssh).toBe("admin@m4");
+    expect((edited.base.servers as Record<string, unknown>[])[0].issuer_ssh).toBe("admin@m4");
+    const cleared = updateServer(edited, 0, "issuer_ssh", " ");
+    expect(cleared.base.servers).toEqual([{ id: "t3", url: "http://127.0.0.1:13774", token_env: "T3", backend: "t3" }]);
+  });
   it("keeps a server's token_file through edits and drops it when cleared", () => {
     const p = parseConfig(rawConfig())!;
     p.base.servers = [{ id: "local", url: "ws://x", token_env: "TOK", token_file: "~/.config/herdeck/local-token" }];

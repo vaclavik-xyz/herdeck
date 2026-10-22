@@ -326,6 +326,18 @@ def _server_config(raw: dict) -> ServerConfig:
         raise ConfigError(
             f"server '{raw['id']}': desktop_read_state is an option of T3 servers only"
         )
+    # T3 only: SSH target (user@host) that issues/renews this server's token
+    # (t3_setup --renew-all). Unused by the runtime; validated so a typo or an
+    # injected option never reaches ssh.
+    issuer_ssh = raw.get("issuer_ssh")
+    if issuer_ssh is not None:
+        if backend != "t3":
+            raise ConfigError(f"server '{raw['id']}': issuer_ssh is an option of T3 servers only")
+        from .t3_remote import validate_ssh_target
+        try:
+            validate_ssh_target(issuer_ssh)
+        except ValueError:
+            raise ConfigError(f"server '{raw['id']}': issuer_ssh must be user@host") from None
     if backend == "t3":
         from .t3 import T3Http
         try:
@@ -333,7 +345,8 @@ def _server_config(raw: dict) -> ServerConfig:
         except ValueError as exc:
             raise ConfigError(str(exc)) from None
     return ServerConfig(
-        raw["id"], raw["url"], token, backend, desktop_read_state, _server_label(raw)
+        raw["id"], raw["url"], token, backend, desktop_read_state,
+        label=_server_label(raw), issuer_ssh=issuer_ssh,
     )
 
 

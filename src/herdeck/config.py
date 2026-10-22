@@ -24,6 +24,8 @@ class ServerConfig:
     # Optional short display name (e.g. "M4"): the tile's server tag when
     # [view].tile_fields has "server", instead of the backend name.
     label: str | None = None
+    # T3 only: ``user@host`` that issues/renews the token over SSH (t3_setup).
+    issuer_ssh: str | None = None
 
 
 @dataclass
