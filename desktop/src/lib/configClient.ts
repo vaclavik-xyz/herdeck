@@ -241,6 +241,8 @@ export interface ServerRecord {
   backend?: string;
   /** T3 only: read this Mac's T3 desktop visited state (ServersSection toggle). */
   desktop_read_state?: boolean;
+  /** T3 only: `user@host` that issues/renews the token over SSH (`t3_setup --renew-all`). */
+  issuer_ssh?: string;
 }
 
 export interface LocalSessionRecord {
@@ -283,17 +285,21 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
       ...(typeof r.label === "string" ? { label: r.label } : {}),
       ...(typeof r.token_file === "string" ? { token_file: r.token_file } : {}),
       ...(typeof r.backend === "string" ? { backend: r.backend } : {}),
-      ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}) };
+      ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}),
+      ...(typeof r.issuer_ssh === "string" ? { issuer_ssh: r.issuer_ssh } : {}) };
   });
 }
 
-/** The TOML shape of a record: a blank `token_file` is dropped (the backend
- *  rejects an empty path), and so is a blank `token_env` next to a token file —
- *  a file-only server is valid, an empty env-var name is not. A blank `label`
- *  is dropped too (no label = the backend name on the tile). */
+/** The TOML shape of a record: a blank `token_file` or `issuer_ssh` is dropped
+ *  (the backend rejects an empty value), and so is a blank `token_env` next to a
+ *  token file — a file-only server is valid, an empty env-var name is not. A
+ *  blank `label` is dropped too (no label = the backend name on the tile). */
 function normalizeServer(record: ServerRecord): ServerRecord {
-  const { label, ...unlabelled } = record;
-  const s: ServerRecord = (label ?? "").trim() ? { ...unlabelled, label } : unlabelled;
+  const { label, issuer_ssh, ...plain } = record;
+  let s: ServerRecord = (label ?? "").trim() ? { ...plain, label } : plain;
+  // A blank issuer_ssh is dropped too: the backend only accepts user@host.
+  const issuer = (issuer_ssh ?? "").trim();
+  s = issuer ? { ...s, issuer_ssh: issuer } : s;
   const { token_file, ...rest } = s;
   const file = (token_file ?? "").trim() ? token_file : undefined;
   if (file === undefined) return rest;

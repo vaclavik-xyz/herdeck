@@ -31,7 +31,7 @@ function demoPayload(): ConfigPayload {
     base: {
       servers: [
         { id: "m4", url: "ws://host:8788", token_env: "HERDECK_TOKEN_M4" },
-        { id: "t3", url: "http://host:3773", token_env: "T3_TOKEN", backend: "t3", desktop_read_state: true },
+        { id: "t3", url: "http://host:3773", token_env: "T3_TOKEN", backend: "t3", desktop_read_state: true, issuer_ssh: "admin@t3-host" },
       ],
       deck: { grid: "5x3", overview_order: ["m4"] },
       view: { management: "launcher_menu", tile_fields: ["repo", "status"], project_icons: { herdeck: "~/icons/herdeck.png" } },

@@ -941,6 +941,22 @@ def test_t3_desktop_read_state_is_a_t3_server_option(tmp_path, monkeypatch):
         resolve_profile(load_settings(config))
 
 
+def test_t3_issuer_ssh_is_a_validated_t3_server_option(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "t3"\nurl = "http://127.0.0.1:13773"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\nissuer_ssh = "admin@100.115.61.124"\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].issuer_ssh == "admin@100.115.61.124"
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].issuer_ssh is None
+    for bad in ("-oProxyCommand=sh", "admin@host;rm -rf ~", "admin@host -L1:x:2", ""):
+        config = write(tmp_path / "config.toml", base + f'backend = "t3"\nissuer_ssh = {bad!r}\n'.replace("'", '"'))
+        with pytest.raises(ConfigError, match="issuer_ssh must be user@host"):
+            resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + 'issuer_ssh = "admin@host"\n')
+    with pytest.raises(ConfigError, match="T3 servers only"):
+        resolve_profile(load_settings(config))
+
+
 def test_notifications_payload_done_rules_parsed():
     from herdeck.settings import _notifications_config
 

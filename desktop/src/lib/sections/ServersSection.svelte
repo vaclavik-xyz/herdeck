@@ -59,7 +59,7 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  function set(i: number, field: "id" | "label" | "url" | "token_env" | "token_file", v: string): void {
+  function set(i: number, field: "id" | "label" | "url" | "token_env" | "token_file" | "issuer_ssh", v: string): void {
     payload = updateServer(payload, i, field, v);
     onChange();
   }
@@ -144,6 +144,9 @@
       onclear={() => clearSecret(s.token_env)}
     />
     <TextField label="token_file" help={HELP.token_file} owner={s.id} value={s.token_file ?? ""} oninput={(v) => set(i, "token_file", v)} />
+    {#if s.backend === "t3"}
+      <TextField label="issuer_ssh" help={HELP.issuer_ssh} owner={s.id} value={s.issuer_ssh ?? ""} oninput={(v) => set(i, "issuer_ssh", v)} />
+    {/if}
   </fieldset>
 {/each}
 <button type="button" onclick={add}>{lm.add_server}</button>

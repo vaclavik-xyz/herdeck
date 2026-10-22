@@ -650,8 +650,8 @@ every tile shows a notice.
 
 Two topologies work: a T3 desktop app or server on the same Mac (discovered
 automatically, below), or a remote headless server reached through an SSH
-tunnel (see the transport section below; pass `--url` with the tunnel's local
-URL). Details: [the T3 contract](t3-code-integration.md).
+tunnel (`--issuer-ssh user@host`, see the transport section below).
+Details: [the T3 contract](t3-code-integration.md).
 
 After the inventory and backups described above, run from this source checkout
 or an environment with the updated Herdeck CLI installed:
@@ -703,7 +703,8 @@ To remove the connection, keeping the credential available for rollback:
 herdeck-t3-connect --id t3-local --disconnect
 ```
 
-This removes only that T3 entry and its selection references, backs up the config,
+This removes only that T3 entry and its selection references (and the
+`com.herdeck.t3-forward.<id>` LaunchAgent if `--install-forward` created it), backs up the config,
 and preserves T3 history and Herdr settings. Verify the remaining runtime
 connections. Restore the backup to roll back removal. Revoke the retained T3
 session and remove its keychain entry only after rollback is no longer needed.
@@ -788,36 +789,64 @@ available. A thread without a title falls back to the project name.
 
 ### Dedicated T3 transport and renewal (macOS)
 
-Use an already authorized SSH account on the T3 host. Check noninteractive SSH
-and verify the destination's actual loopback port first. A user LaunchAgent
-`com.herdeck.t3-forward` owns this command on macBench:
+Use an already authorized SSH account on the T3 host (noninteractive SSH must
+work: `ssh -o BatchMode=yes user@host true`). One command connects it:
 
 ```sh
-/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
-  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
-  -L 127.0.0.1:13773:127.0.0.1:3773 <user>@<t3-host>
+python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh admin@100.115.61.124 --install-forward
 ```
 
-Its plist uses RunAtLoad, KeepAlive and ThrottleInterval=10. Bind only loopback;
-reuse existing SSH keys and tailnet membership. `t3-headless` points to this
-stable local port (`http://127.0.0.1:13773`); its ID and token_env remain
-unchanged. Preserve a config backup
-before changing the URL. This is an application transport, not a new public route.
+- `--install-forward` writes and loads the LaunchAgent
+  `com.herdeck.t3-forward.<id>` (`~/Library/LaunchAgents`, RunAtLoad, KeepAlive,
+  ThrottleInterval=10, log `~/Library/Logs/herdeck/t3-forward.<id>.log`). It runs
+  `/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=8
+  -L 127.0.0.1:<local>:127.0.0.1:<remote> user@host` and setup waits until the
+  local port answers. The SSH target is validated strictly (`[user@]host`,
+  hostname/alias or IPv4) and is one argv element; there is no shell.
+- `--local-port` defaults to the first free loopback port from 13773 that no
+  configured server uses. `--remote-port` defaults to the port in the remote
+  `~/.t3/userdata/server-runtime.json` (read over SSH).
+- Without `--install-forward` the tunnel must already exist: pass its
+  `--local-port`; setup refuses when nothing answers there.
+- The token is issued on the T3 host over SSH (the same issuer as renewal),
+  then verified, stored in Keychain and written like a local connect, plus
+  `issuer_ssh = "user@host"` on the `[[servers]]` entry. Any failure restores the
+  config, clears the Keychain entry, revokes the session on the T3 host and
+  unloads/removes the forward agent it created.
 
-`com.herdeck.t3-renew` runs every hour (StartInterval=3600, RunAtLoad=true) in the
-same GUI user domain and with the same Python interpreter as the runtime:
+Renewal of every T3 server, remote ones through their recorded `issuer_ssh`,
+local ones through the local T3 CLI, restarting the runtime once if anything
+was renewed:
+
+```sh
+python -m herdeck.t3_setup --renew-all --restart-label dev.herdeck.runtime
+python -m herdeck.t3_setup --install-renew-agent --restart-label dev.herdeck.runtime
+```
+
+`--install-renew-agent` writes and loads the single `com.herdeck.t3-renew`
+LaunchAgent (StartInterval=3600, RunAtLoad) that runs the first command with
+this Python interpreter, `--config` of the current config and PYTHONPATH of this
+source; reinstall it after deploying a new source. It refuses to overwrite an
+existing `com.herdeck.t3-renew` plist: boot out and delete an older per-server
+job first. `--renew-all` prints one JSON line per server (never tokens) and a
+summary; one failure does not stop the others; it exits 1 if any server or the
+restart failed. Servers with only `token_file` are skipped (renew them by hand).
+A failed restart keeps the already-validated new credentials; the next runtime
+restart adopts them. `com.herdeck.app` is a hand-made runtime label; a runtime
+installed with `herdeck-service install runtime` uses `dev.herdeck.runtime`.
+
+The single-server form keeps working for existing jobs:
 
 ```sh
 python -m herdeck.t3_setup --id t3-headless --renew \
   --issuer-ssh <user>@<t3-host> --restart-label com.herdeck.app
 ```
 
-`com.herdeck.app` is that host's hand-made runtime label. A runtime installed
-with `herdeck-service install runtime` uses `dev.herdeck.runtime` instead.
+(`--issuer-ssh` may be omitted when the entry records `issuer_ssh`.)
 
-The runtime restart label is required: replacing Keychain alone cannot update
-a running connector. Set PYTHONPATH to the deployed source's `src` directory in the renewal plist.
-Do not inject the bearer into the renewal environment. Renewal checks Keychain
+The runtime restart label is required for `--renew`: replacing Keychain alone cannot update
+a running connector. Do not inject the bearer into the renewal environment. Renewal checks Keychain
 and session expiry, issues a new 30-day credential only within seven days of
 expiry (or after expiry), validates it against the configured server, then stores
 it under the same Keychain account and restarts the runtime to adopt it. An
@@ -830,10 +859,17 @@ A failed validation preserves the old credential and revokes the newly issued
 one. The previous credential expires naturally to retain a rollback window.
 The setup command never prints tokens or puts them in subprocess arguments.
 
-Check both LaunchAgents after installation, including their exit status. Verify
+Manual fallback (other OS, or an existing hand-made `com.herdeck.t3-forward`):
+run the `ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remote> user@host` command above
+under your own supervisor, then connect with
+`--issuer-ssh user@host --local-port <local>` (no `--install-forward`). A
+hand-made renewal plist runs `python -m herdeck.t3_setup --renew-all
+--restart-label <label>` hourly in the GUI user domain with PYTHONPATH set to
+the deployed source's `src` directory.
+
+Check the LaunchAgents after installation, including their exit status. Verify
 runtime `connections`, not just an SSH listener. Sleep/offline periods are recovered
-by launchd retry and the next renewal interval. Update PYTHONPATH when deploying
-a new source release; keep the runtime helper and renewal agent on the same source.
+by launchd retry and the next renewal interval.
 
 ### T3 lifecycle controls
 

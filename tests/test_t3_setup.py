@@ -71,7 +71,8 @@ def test_setup_keychain_backup_and_rollback(tmp_path, monkeypatch, capsys, fail_
     assert list(tmp_path.glob("config.toml.*.bak"))[0].read_text() == old
 
 
-def test_disconnect_preserves_herdr_and_rollback_credential(tmp_path, capsys):
+def test_disconnect_preserves_herdr_and_rollback_credential(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(t3_setup.t3_remote, "agents_dir", lambda: tmp_path / "LaunchAgents")
     path = tmp_path / "config.toml"
     path.write_text('[[servers]]\nid="herdr"\nurl="ws://old"\n[[servers]]\nid="t3"\nbackend="t3"\n'
                     '[deck]\noverview_order=["herdr","t3"]\n[custom]\nkeep=true\n')
