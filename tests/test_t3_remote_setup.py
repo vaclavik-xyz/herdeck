@@ -200,6 +200,46 @@ def test_remote_rollback_revokes_remotely_and_removes_forward(env, monkeypatch, 
     assert len(env.fake.launchctl("bootout")) == 1
 
 
+def test_remote_connect_with_token_file_skips_keychain(env, monkeypatch, capsys):
+    def no_keychain(*a):
+        raise AssertionError("Keychain must not be used")  # e.g. over SSH: PasswordSetError
+    for mod in (t3_setup,):
+        monkeypatch.setattr(mod, "set_secret", no_keychain)
+        monkeypatch.setattr(mod, "peek_keychain", no_keychain)
+        monkeypatch.setattr(mod, "get_secret", no_keychain)
+    t3_setup.connect(_args(env, token_file=""))
+    out = capsys.readouterr().out
+    assert "secret" not in out
+    token = env.tmp / "t3-m4mini-token"  # default: next to the config
+    assert json.loads(out)["token_file"] == str(token)
+    assert token.read_text() == "remote-secret\n" and (token.stat().st_mode & 0o777) == 0o600
+    server = tomllib.loads(env.path.read_text())["servers"][1]
+    assert server == {"id": "t3-m4mini", "url": "http://127.0.0.1:13774", "backend": "t3",
+                      "issuer_ssh": TARGET, "token_file": str(token)}
+    # The runtime and renewal both resolve this entry to the file.
+    from herdeck.settings import resolve_server_token
+    assert resolve_server_token(server) == ("remote-secret", "file")
+    assert t3_renew._Credential(server).read() == "remote-secret"
+
+
+def test_token_file_rollback_removes_the_file_and_revokes(env, tmp_path):
+    original = env.path.read_text()
+    env.shell["value"] = {"threads": []}  # contract failure after issuing
+    token = tmp_path / "creds/m4"
+    with pytest.raises((ValueError, T3Error)):
+        t3_setup.connect(_args(env, remote_port=3773, token_file=str(token)))
+    assert not token.exists() and env.path.read_text() == original
+    assert env.fake.issuer_ops == [("issue", None), ("revoke", "sess-r")]
+
+
+def test_token_file_refuses_an_existing_file_before_issuing(env, tmp_path):
+    token = tmp_path / "taken"
+    token.write_text("someone-else\n")
+    with pytest.raises(ValueError, match="already exists"):
+        t3_setup.connect(_args(env, remote_port=3773, token_file=str(token)))
+    assert token.read_text() == "someone-else\n" and env.fake.issuer_ops == []
+
+
 def test_remote_issue_failure_removes_forward_without_leaking(env):
     env.fake.issue_ok = False
     with pytest.raises(ValueError) as exc:

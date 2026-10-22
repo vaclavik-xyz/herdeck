@@ -14,13 +14,12 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import ConfigError
-from .secrets import peek_keychain, set_secret
+from .secrets import peek_keychain, set_secret, write_token_file
 from .t3_actions import negotiate
 from .t3_client import T3Client, T3Error, T3Http
 from .t3_remote import validate_ssh_target
@@ -145,20 +144,7 @@ class _Credential:
         if self.path is None:
             set_secret(self.env, token)
             return
-        # Atomic, owner-only: the runtime refuses a token file others can read.
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix="." + self.path.name + ".")
-        try:
-            os.fchmod(fd, 0o600)
-            os.write(fd, (token + "\n").encode())
-            os.fsync(fd)
-            os.close(fd)
-            fd = None
-            os.replace(tmp, self.path)
-        except BaseException:
-            if fd is not None:
-                os.close(fd)
-            Path(tmp).unlink(missing_ok=True)
-            raise
+        write_token_file(self.path, token)
 
 
 def _check_label(label):
