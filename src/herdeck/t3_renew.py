@@ -109,18 +109,21 @@ RENEW_WINDOW = 7 * 86400
 
 
 class _Credential:
-    """Where a server's token lives for renewal: its ``token_file`` when one is
-    configured (the runtime reads it before the Keychain, so renewing only the
-    Keychain would leave the runtime on a revoked token), else the Keychain
-    entry named ``token_env``. Raises when the server cannot be renewed."""
+    """Where the runtime reads a server's token, so renewal replaces that one:
+    its ``token_file`` when the file exists (the runtime reads it before the
+    Keychain, so renewing only the Keychain would leave the runtime on a revoked
+    token), else the Keychain entry named ``token_env``. Raises when the server
+    cannot be renewed."""
 
     def __init__(self, server: dict):
         env = server.get("token_env")
         path = server.get("token_file")
         if env and os.environ.get(env):
             raise ValueError("Renewal cannot replace an environment override; remove it")
-        if isinstance(path, str) and path.strip():
-            self.path, self.env = Path(os.path.expanduser(path.strip())), None
+        path = Path(os.path.expanduser(path.strip())) if isinstance(path, str) and path.strip() else None
+        # Same order as the runtime: an absent token_file falls through to the Keychain.
+        if path is not None and (path.exists() or not env):
+            self.path, self.env = path, None
         elif env:
             self.path, self.env = None, env
         else:

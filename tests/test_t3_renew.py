@@ -66,9 +66,9 @@ def test_renew_rewrites_the_token_file_the_runtime_reads_first(tmp_path, monkeyp
                 f'token_env="TEST_T3_TOKEN"\ntoken_file="{token}"\n')
     path.write_text(original)
     monkeypatch.delenv("TEST_T3_TOKEN", raising=False)
-    keychain = []
-    monkeypatch.setattr(t3_renew, "peek_keychain", lambda name: keychain.append(name))
-    monkeypatch.setattr(t3_renew, "set_secret", lambda name, value: keychain.append(name))
+    keychain = {"TEST_T3_TOKEN": "keychain-private"}
+    monkeypatch.setattr(t3_renew, "peek_keychain", keychain.get)
+    monkeypatch.setattr(t3_renew, "set_secret", lambda name, value: keychain.update({name: value}))
     calls = []
     def issue(args, operation, session_id=None):
         calls.append(operation)
@@ -88,18 +88,22 @@ def test_renew_rewrites_the_token_file_the_runtime_reads_first(tmp_path, monkeyp
             raise OSError("launchd unavailable")
     monkeypatch.setattr(t3_renew.subprocess, "run", run)
     args = argparse.Namespace(config=path, id="t3", restart_label="dev.herdeck.runtime")
-    if case == "renew":
+    if case in ("renew", "missing"):
         t3_renew.renew(args)
         assert "private" not in capsys.readouterr().out
-        assert token.read_text() == "new-private\n"
-        assert (token.stat().st_mode & 0o777) == 0o600
     else:
         with pytest.raises((t3_renew.T3Error, OSError, ValueError)):
             t3_renew.renew(args)
-        if case != "missing":
-            assert token.read_text() == "old-private\n"
+        assert token.read_text() == "old-private\n"
         assert calls == (["issue", "revoke"] if case.endswith("failure") else [])
-    assert keychain == []  # The file is the credential; the Keychain is not touched.
+    if case == "renew":
+        assert token.read_text() == "new-private\n"
+        assert (token.stat().st_mode & 0o777) == 0o600
+    if case == "missing":
+        # Like the runtime, an absent token file falls through to the Keychain.
+        assert not token.exists() and keychain == {"TEST_T3_TOKEN": "new-private"}
+    else:
+        assert keychain == {"TEST_T3_TOKEN": "keychain-private"}  # The file is the credential.
     assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
     assert path.read_text() == original
 
