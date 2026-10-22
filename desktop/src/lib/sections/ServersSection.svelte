@@ -12,6 +12,9 @@
     updateServer,
     setLocalSessionSelected,
     secretFlag,
+    serverLabel,
+    serverLabelIssue,
+    SERVER_LABEL_MAX,
     type ConfigPayload,
     type ServerRecord,
   } from "../configClient";
@@ -42,6 +45,8 @@
       add_server: "+ add server",
       save_token_failed: "saving token '{name}' failed (HTTP {code})",
       clear_token_failed: "clearing token '{name}' failed (HTTP {code})",
+      label_too_long: "label is longer than {max} characters",
+      label_duplicate: "another server already uses the label '{label}'",
     },
     cs: {
       local_heading: "Lokální sessions",
@@ -55,6 +60,8 @@
       add_server: "+ přidat server",
       save_token_failed: "uložení tokenu '{name}' selhalo (HTTP {code})",
       clear_token_failed: "smazání tokenu '{name}' selhalo (HTTP {code})",
+      label_too_long: "label je delší než {max} znaků",
+      label_duplicate: "label '{label}' už používá jiný server",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -128,10 +135,15 @@
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.label ? `${s.label} · ${s.id}` : s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
+    <legend>{serverLabel(s) ? `${serverLabel(s)} · ${s.id}` : s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
     {#if s.backend === "t3"}<p>T3 Code</p>{/if}
     <TextField label="id" help={HELP.id} owner={s.id} value={s.id} oninput={(v) => set(i, "id", v)} />
     <TextField label="label" help={HELP.label} owner={s.id} value={s.label ?? ""} oninput={(v) => set(i, "label", v)} />
+    {#if serverLabelIssue(servers, i) === "too_long"}
+      <p class="note bad" role="alert" data-label-issue="too_long">{fmt(lm.label_too_long, { max: SERVER_LABEL_MAX })}</p>
+    {:else if serverLabelIssue(servers, i) === "duplicate"}
+      <p class="note bad" role="alert" data-label-issue="duplicate">{fmt(lm.label_duplicate, { label: serverLabel(s) })}</p>
+    {/if}
     <TextField label="url" help={HELP.url} owner={s.id} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
       label="token_env"
@@ -187,6 +199,15 @@
   .remote-heading { margin: 0 0 var(--s2); }
   fieldset { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); padding: var(--s4) var(--s5); margin: var(--s2) 0; }
   legend { color: var(--text); }
+  .note.bad {
+    margin: var(--s2) 0 0;
+    padding: var(--s2) var(--s3);
+    border: 1px solid color-mix(in srgb, var(--st-blocked) 45%, var(--line));
+    border-radius: var(--r-control);
+    background: color-mix(in srgb, var(--st-blocked) 12%, var(--canvas));
+    color: var(--text);
+    font: var(--t-help);
+  }
   button {
     min-height: 30px;
     padding: 0 var(--s3);

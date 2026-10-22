@@ -981,5 +981,33 @@ def test_server_label_is_optional_stripped_and_bounded(tmp_path, monkeypatch):
     with pytest.raises(ConfigError, match="longer than 16"):
         resolve_profile(load_settings(config))
     config = write(tmp_path / "config.toml", base + 'label = "M\\u001b4"\n')
-    with pytest.raises(ConfigError, match="control characters"):
+    with pytest.raises(ConfigError, match="control or format characters"):
         resolve_profile(load_settings(config))
+
+
+@pytest.mark.parametrize("bad", ["\\u0085", "\\u009b", "\\u202e", "\\u200b", "\\ufeff"])
+def test_server_label_rejects_c1_and_format_characters(tmp_path, monkeypatch, bad):
+    # C1 controls (Cc) and bidi/format characters (Cf, e.g. U+202E RIGHT-TO-LEFT
+    # OVERRIDE) would garble or disguise the tile tag; user config rejects them.
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "m4"\nurl = "ws://127.0.0.1:8788"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base + f'label = "M{bad}4"\n')
+    with pytest.raises(ConfigError, match="control or format characters"):
+        resolve_profile(load_settings(config))
+
+
+def test_server_labels_must_be_unique(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    servers = (
+        '[[servers]]\nid = "a"\nurl = "ws://127.0.0.1:8788"\ntoken_env = "TOK"\nlabel = "M4"\n'
+        '[[servers]]\nid = "b"\nurl = "ws://127.0.0.1:8789"\ntoken_env = "TOK"\nlabel = " m4 "\n'
+    )
+    config = write(tmp_path / "config.toml", servers)
+    with pytest.raises(ConfigError, match="servers 'a' and 'b' have the same label 'm4'"):
+        resolve_profile(load_settings(config))
+    # distinct labels (and several unlabelled servers) are fine
+    config = write(tmp_path / "config.toml", servers.replace('" m4 "', '"Neptun"')
+                   + '[[servers]]\nid = "c"\nurl = "ws://127.0.0.1:8790"\ntoken_env = "TOK"\n'
+                   + '[[servers]]\nid = "d"\nurl = "ws://127.0.0.1:8791"\ntoken_env = "TOK"\n')
+    labels = [s.label for s in resolve_profile(load_settings(config)).config.servers]
+    assert labels == ["M4", "Neptun", None, None]
