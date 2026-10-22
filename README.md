@@ -1133,6 +1133,10 @@ ancestors, or `/`). Override it per repository with
 `[view.project_icons]` (`myrepo = "~/icons/myrepo.png"`, a path on the machine
 running the deck; quote a repo name that contains a dot, e.g.
 `"vaclavik.xyz" = "~/icons/site.png"`, or TOML reads it as a nested table).
+T3 tiles take the favicon T3 itself shows for the project (the icon chosen in
+T3, else T3's own discovery in the project folder), same limits; their
+`[view.project_icons]` key is the project's full workspace path
+(`"/Users/me/proj" = "~/icons/proj.png"`).
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.

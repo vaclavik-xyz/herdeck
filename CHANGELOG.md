@@ -6,6 +6,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- T3 tiles show their project's favicon with `[view].tile_icon = "project"` or
+  `"both"`: the icon picked in T3, else the one T3 discovers in the project
+  folder, fetched over T3's asset API with the existing read scope.
+
 ### Changed
 - The T3 backend now requires T3 0.0.46+ (orchestration protocol 2; currently
   the preview/nightly channel). Tiles show the true per-thread status from the

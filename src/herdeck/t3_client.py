@@ -1,6 +1,6 @@
-"""T3 Code orchestration protocol 2 transport: HTTP reads and the WebSocket
-dispatch RPC. No retries here (the connector owns delivery); errors never
-carry response bodies or credentials.
+"""T3 Code orchestration protocol 2 transport: HTTP reads, the WebSocket
+dispatch RPC and project favicons (assets.createUrl). No retries here (the
+connector owns delivery); errors never carry response bodies or credentials.
 
 Contract: docs/t3-code-integration.md (verified against T3 0.0.46 preview).
 """
@@ -16,6 +16,8 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import websockets
+
+from .project_icon_discovery import ICON_MIMES, MAX_ICON_BYTES, mime_for_path
 
 PROTOCOL = 2
 _LIMIT = 8 * 1024 * 1024
@@ -41,6 +43,10 @@ class T3Rejected(T3Error):
         self.handshake = handshake
 
 
+class _TooLarge(T3Error):
+    """A response over the caller's byte limit."""
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -62,19 +68,25 @@ class T3Http:
         self._token = token
         self._opener = build_opener(ProxyHandler({}), _NoRedirect())
 
-    def _request(self, path, method):
+    def _raw(self, path, method, limit=_LIMIT):
+        """(Content-Type, body) of a response of at most ``limit`` bytes."""
         req = Request(self.url + path, method=method, data=b"" if method == "POST" else None,
                       headers={"Authorization": "Bearer " + self._token,
                                "x-t3-orchestration-protocol": str(PROTOCOL)})
         try:
             with self._opener.open(req, timeout=_TIMEOUT) as response:
-                raw = response.read(_LIMIT + 1)
+                ctype = response.headers.get("Content-Type", "")
+                raw = response.read(limit + 1)
         except HTTPError as exc:
             raise T3Error(f"T3 HTTP {exc.code}", exc.code) from None
         except (URLError, OSError, ValueError, HTTPException):
             raise T3Error("T3 transport or response error") from None
-        if len(raw) > _LIMIT:
-            raise T3Error("T3 response exceeds limit")
+        if len(raw) > limit:
+            raise _TooLarge("T3 response exceeds limit")
+        return ctype, raw
+
+    def _request(self, path, method):
+        _, raw = self._raw(path, method)
         try:
             result = json.loads(raw)
         except ValueError:
@@ -136,29 +148,68 @@ class T3Client:
         return self._projection(self.http.get(
             "/api/orchestration/threads/" + quote(thread_id, safe="")))
 
-    async def dispatch(self, command: dict) -> dict:
+    async def _call(self, method: str, payload: dict) -> dict | None:
+        """The Exit of one WebSocket RPC (None when the stream ends first).
+        Transport errors propagate raw; each caller maps them."""
         ticket = (await asyncio.to_thread(self.http.post, "/api/auth/websocket-ticket")).get("ticket")
         if not isinstance(ticket, str) or not ticket:
             raise T3Error("Unsupported T3 ticket response")
         url = self._ws_base + "/ws?" + urlencode({"orchestrationProtocol": PROTOCOL, "wsTicket": ticket})
         rid = next(self._ids)
-        frame = {"_tag": "Request", "id": rid, "tag": "orchestration.dispatchCommand",
-                 "payload": command, "headers": []}
+        frame = {"_tag": "Request", "id": rid, "tag": method, "payload": payload, "headers": []}
+        async with asyncio.timeout(_TIMEOUT):
+            async with websockets.connect(url, proxy=None, max_size=_LIMIT) as ws:
+                await ws.send(json.dumps(frame))
+                async for raw in ws:
+                    msg = json.loads(raw)
+                    tag = msg.get("_tag")
+                    if tag == "Ping":
+                        await ws.send(json.dumps({"_tag": "Pong"}))
+                    elif tag == "Exit" and msg.get("requestId") == rid:
+                        return msg.get("exit") or {}
+        return None
+
+    async def project_favicon(self, workspace_root: str, favicon_path: str | None = None):
+        """(mime, bytes) of a project's favicon as T3 resolves it (the project's
+        own faviconPath when set, else T3's discovery), or None when it has none
+        or it is not PNG/ICO/SVG within MAX_ICON_BYTES. Needs orchestration:read."""
+        resource = {"_tag": "project-favicon", "cwd": workspace_root}
+        if favicon_path:
+            resource["path"] = favicon_path
         try:
-            async with asyncio.timeout(_TIMEOUT):
-                async with websockets.connect(url, proxy=None, max_size=_LIMIT) as ws:
-                    await ws.send(json.dumps(frame))
-                    async for raw in ws:
-                        msg = json.loads(raw)
-                        tag = msg.get("_tag")
-                        if tag == "Ping":
-                            await ws.send(json.dumps({"_tag": "Pong"}))
-                        elif tag == "Exit" and msg.get("requestId") == rid:
-                            exit_ = msg.get("exit") or {}
-                            if exit_.get("_tag") == "Success":
-                                value = exit_.get("value") or {}
-                                return {"sequence": value.get("sequence")}
-                            raise T3Rejected(_rejection(exit_.get("cause")))
+            exit_ = await self._call("assets.createUrl", {"resource": resource})
+        except (OSError, TimeoutError, ValueError, websockets.WebSocketException):
+            raise T3Error("T3 favicon request failed") from None
+        if not exit_ or exit_.get("_tag") != "Success":
+            raise T3Error("T3 refused the favicon request")
+        value = exit_.get("value") or {}
+        rel = value.get("relativeUrl")
+        # Signed, short-lived and same-origin; never follow anything else.
+        if not isinstance(rel, str) or not rel.startswith("/api/assets/"):
+            raise T3Error("Unsupported T3 asset response")
+        try:
+            ctype, data = await asyncio.to_thread(self.http._raw, rel, "GET", MAX_ICON_BYTES)
+        except _TooLarge:
+            return None
+        except T3Error as exc:
+            if exc.code == 404:
+                return None  # T3 found no favicon for the project
+            raise
+        source = value.get("sourcePath")
+        mime = mime_for_path(source) if isinstance(source, str) else None
+        if mime is None:
+            ctype = ctype.split(";")[0].strip().lower()
+            mime = ctype if ctype in ICON_MIMES else None
+        return (mime, data) if mime and data else None
+
+    async def dispatch(self, command: dict) -> dict:
+        try:
+            exit_ = await self._call("orchestration.dispatchCommand", command)
+            if exit_ is not None:
+                if exit_.get("_tag") == "Success":
+                    value = exit_.get("value") or {}
+                    return {"sequence": value.get("sequence")}
+                raise T3Rejected(_rejection(exit_.get("cause")))
         except T3Rejected:
             raise
         except websockets.InvalidStatus as exc:

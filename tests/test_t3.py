@@ -869,3 +869,99 @@ async def test_a_ready_plan_drill_offers_implement_and_the_reply_macros():
     reply = next(a for a in actions if "id" not in a)
     cmd = reply["make"](t3.key)
     assert cmd.kind == "backend_action" and cmd.action == "continue" and cmd.text
+
+
+# --- project favicons ------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 32
+
+
+class IconClient(FakeClient):
+    def __init__(self, *threads, **kw):
+        super().__init__(*threads, **kw)
+        self.favicon_calls = []
+        self.favicons = {}  # (root, path) -> (mime, bytes) | None | Exception
+
+    async def project_favicon(self, root, path=None):
+        self.favicon_calls.append((root, path))
+        found = self.favicons.get((root, path))
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+
+def _icon_harness(client):
+    icons = []
+    h = Harness(client, on_project_icon=lambda sid, icon: icons.append(icon))
+    return h, icons
+
+
+async def tick(h, rounds=1):
+    """One poll-loop iteration as run() does it: refresh, then the favicon sync."""
+    for _ in range(rounds):
+        await h.c.refresh()
+        await h.c._sync_icons()
+
+
+async def test_a_project_favicon_from_t3_reaches_the_icon_store_then_the_tile():
+    client = IconClient(thread("completed"))
+    client.projects[0]["faviconPath"] = "app/icon.png"
+    client.favicons[("/Users/dev/proj", "app/icon.png")] = ("image/png", PNG)
+    h, icons = _icon_harness(client)
+    await tick(h)
+    tid = tid_of("completed")
+    assert h.state(tid).project_icon == ""  # bytes arrive before any tile names the hash
+    assert [(i.server_id, i.mime, i.data) for i in icons] == [("t3", "image/png", PNG)]
+    await tick(h)
+    assert h.state(tid).project_icon == icons[0].hash
+    assert client.favicon_calls == [("/Users/dev/proj", "app/icon.png")]  # not re-fetched yet
+
+
+async def test_a_project_without_a_favicon_keeps_the_monogram_and_is_retried_later():
+    client = IconClient(thread("completed"))
+    h, icons = _icon_harness(client)
+    await tick(h, 2)
+    assert icons == [] and h.state(tid_of("completed")).project_icon == ""
+    assert client.favicon_calls == [("/Users/dev/proj", None)]
+    client.favicons[("/Users/dev/proj", None)] = ("image/png", PNG)
+    h.c._clock = lambda: NOW + t3mod._ICON_RETRY_S
+    await tick(h, 2)
+    assert len(icons) == 1 and h.state(tid_of("completed")).project_icon == icons[0].hash
+
+
+async def test_a_failed_refetch_keeps_the_icon_already_shown():
+    client = IconClient(thread("completed"))
+    client.favicons[("/Users/dev/proj", None)] = ("image/png", PNG)
+    h, icons = _icon_harness(client)
+    await tick(h, 2)
+    shown = h.state(tid_of("completed")).project_icon
+    assert shown
+    client.favicons[("/Users/dev/proj", None)] = T3Error("down")
+    h.c._clock = lambda: NOW + t3mod._ICON_RECHECK_S
+    await tick(h, 2)
+    assert h.state(tid_of("completed")).project_icon == shown
+    assert len(client.favicon_calls) == 2
+
+
+async def test_favicons_are_not_fetched_without_an_icon_consumer():
+    client = IconClient(thread("completed"))
+    h = Harness(client)
+    await tick(h, 2)
+    assert client.favicon_calls == []
+
+
+async def test_the_poll_loop_syncs_favicons_after_each_refresh():
+    client = IconClient(thread("completed"))
+    client.favicons[("/Users/dev/proj", None)] = ("image/png", PNG)
+    h, icons = _icon_harness(client)
+    await h.run_rounds(3)
+    assert len(icons) == 1 and h.state(tid_of("completed")).project_icon == icons[0].hash
+
+
+async def test_a_malformed_favicon_answer_never_takes_the_connection_down():
+    client = IconClient(thread("completed"))
+    client.favicons[("/Users/dev/proj", None)] = AttributeError("'list' object has no attribute 'get'")
+    h, icons = _icon_harness(client)
+    await h.run_rounds(3)
+    assert h.connections[:3] == [("t3", True)] * 3  # then the shutdown's False
+    assert icons == [] and client.favicon_calls == [("/Users/dev/proj", None)]  # retried later, not every poll

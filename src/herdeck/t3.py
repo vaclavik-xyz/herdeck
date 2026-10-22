@@ -28,6 +28,8 @@ import uuid
 from datetime import UTC, datetime
 
 from .i18n import tr
+from .project_icon_discovery import icon_hash
+from .protocol import ProjectIcon
 from .t3_actions import Incompatible, build_commands, capabilities, negotiate, thread_actions
 from .t3_client import T3Client, T3Error, T3Http, T3Rejected
 from .t3_state import active_plan, lifecycle, published, thread_state
@@ -49,6 +51,10 @@ _CONNECT_ERRORS = {401: CREDENTIAL_INVALID,
 # Raised by the pure state/action mappers on a thread that breaks the contract.
 _MALFORMED = (KeyError, TypeError, ValueError, AttributeError)
 _DELIVERY_MEMORY = 256
+# A project's favicon is re-fetched after this long (T3 re-resolves it about
+# every 30 min); a project without one, or a failed fetch, is retried sooner.
+_ICON_RECHECK_S = 1800.0
+_ICON_RETRY_S = 600.0
 _read_state_warned = False
 
 
@@ -78,7 +84,7 @@ class T3Connector:
     capabilities = frozenset()
 
     def __init__(self, server, on_snapshot, on_event, on_connection, on_result=None,
-                 on_error=None, *, client=None, language="en", **kwargs):
+                 on_error=None, *, client=None, language="en", on_project_icon=None, **kwargs):
         self.server = server
         # [view].language of the deck; a config reload rebuilds the connector.
         self._lang = language
@@ -87,6 +93,11 @@ class T3Connector:
         self._on_connection = on_connection
         self._on_result = on_result or (lambda *args: None)
         self._on_error = on_error or (lambda *args: None)
+        self._on_project_icon = on_project_icon
+        # (workspaceRoot, faviconPath) -> (icon hash or "", checked at): the
+        # favicon T3 resolves for a project, fetched outside the lock.
+        self._icons = {}
+        self._projects = {}
         self.states = {}
         # tid -> (revision, capabilities, actions, shell, detail) BEFORE any
         # read-only lock; send() validates a press against it.
@@ -167,6 +178,7 @@ class T3Connector:
         shell = await asyncio.to_thread(self.client.shell)
         projects = {p["id"]: p for p in shell["projects"]
                     if isinstance(p, dict) and isinstance(p.get("id"), str)}
+        self._projects = projects
         now = self._clock()
         states, offers = {}, {}
         entries = [(s, False) for s in shell["threads"]] + [(s, True) for s in shell["archivedThreads"]]
@@ -189,6 +201,7 @@ class T3Connector:
             built = self._build(tid, summary, detail, projects, archived, now, stale)
             if built is not None:
                 states[tid], offers[tid] = built
+                states[tid].project_icon = self._icon_hash(projects.get(summary.get("projectId")))
         self._cache = {k: v for k, v in self._cache.items() if k in states}
         self._uncertain = {k: v for k, v in self._uncertain.items() if k in states}
         self.states, self._offers = states, offers
@@ -276,6 +289,7 @@ class T3Connector:
                 self.last_connect_error = None
                 self._set_connected(True)
                 online = True
+                await self._sync_icons()
             except (T3Error, *_MALFORMED) as exc:
                 if getattr(exc, "code", None) is not None:
                     self._ever_connected = True  # an HTTP answer, not a dead transport
@@ -289,6 +303,51 @@ class T3Connector:
             await asyncio.sleep(self._interval)
         self._connected = False
         self._on_connection(self.server.id, False)
+
+    # --- project favicons ---------------------------------------------------
+
+    @staticmethod
+    def _icon_key(project):
+        root = project.get("workspaceRoot") if isinstance(project, dict) else None
+        if not isinstance(root, str) or not root:
+            return None
+        path = project.get("faviconPath")
+        return root, path if isinstance(path, str) and path else None
+
+    def _icon_hash(self, project) -> str:
+        key = self._icon_key(project)
+        entry = self._icons.get(key) if key else None
+        return entry[0] if entry else ""
+
+    async def _sync_icons(self):
+        """Fetch the favicon of each project whose entry is missing or due.
+
+        Runs between refreshes without the lock, so presses never wait on it.
+        The bytes go to the runtime's icon store before a tile names the hash
+        (the next refresh), and any failure only leaves the monogram."""
+        if self._on_project_icon is None:
+            return
+        keys = {k for k in map(self._icon_key, self._projects.values()) if k}
+        self._icons = {k: v for k, v in self._icons.items() if k in keys}
+        now = self._clock()
+        for key in sorted(keys, key=lambda k: (k[0], k[1] or "")):
+            if self._stop:
+                return
+            entry = self._icons.get(key)
+            if entry and now - entry[1] < (_ICON_RECHECK_S if entry[0] else _ICON_RETRY_S):
+                continue
+            try:
+                found = await self.client.project_favicon(*key)
+                digest = ""
+                if found is not None:
+                    mime, data = found
+                    digest = icon_hash(data)
+                    self._on_project_icon(self.server.id, ProjectIcon(self.server.id, digest, mime, data))
+            except (T3Error, *_MALFORMED):
+                # Never a connection failure: an odd asset answer only costs the
+                # icon, and a transient failure keeps the icon already shown.
+                digest = entry[0] if entry else ""
+            self._icons[key] = (digest, now)
 
     # --- delivery ------------------------------------------------------------
 

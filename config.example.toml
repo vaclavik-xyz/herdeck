@@ -45,7 +45,8 @@ language = "en"
 # plugin ignores it.
 collapse_idle = false
 # Tile icon: "agent" (default) = the agent's logo, "project" = the project's
-# favicon (found in the repo by the bridge; a coloured letter when none),
+# favicon (found in the repo by the bridge, or served by T3 for T3 tiles; a
+# coloured letter when none),
 # "both" = the agent's logo with a small project badge. In "project" mode the
 # spin working animation renders as a comet ring around the favicon.
 tile_icon = "agent"
