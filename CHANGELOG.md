@@ -37,6 +37,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `t3_setup --token-file [PATH]` stores the new T3 token in an owner-only file
   (default `<config dir>/<id>-token`) instead of Keychain, so setup works over
   SSH and unsigned runtime builds read the token without a Keychain prompt.
+- `t3_setup --remove-renew-agent` boots out and deletes the
+  `com.herdeck.t3-renew` LaunchAgent (only a plist with that `Label`).
 
 ### Changed
 - T3: a thread created without a project (T3's scratch "No project" bucket)
@@ -60,6 +62,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The config editor flags a server label that is too long or already used
   right under the field instead of only on save, and its server header shows
   the trimmed label like the connection list does.
+- `t3_setup --install-renew-agent` refuses to run from the packaged (frozen)
+  app, whose executable cannot run `-m herdeck.t3_setup`; it used to install an
+  agent that could never start.
+- `herdeck-doctor` and `t3_setup` probe a local T3 server whose
+  `server-runtime.json` origin is a wildcard bind (`0.0.0.0`, `::`) over
+  `127.0.0.1`; doctor used to skip it silently.
+- Renewing a symlinked `token_file` updates the file the link points to
+  instead of replacing the link with a regular file.
+- A failed restore or revoke during a T3 renewal rollback no longer hides the
+  original error (it is attached as a note and logged, without token values);
+  when the old credential cannot be restored, the new session is not revoked.
+- A failed `t3_setup --token-file` connect also removes the (empty)
+  directories it created for the token file, and a symlink at the token path
+  is refused like an existing file.
+- The T3 forward helpers validate the server ID and the forwarded remote host
+  themselves instead of relying on the CLI.
 
 ## [0.16.0] - 2026-10-22
 

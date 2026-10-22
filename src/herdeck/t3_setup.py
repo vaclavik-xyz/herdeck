@@ -92,7 +92,8 @@ class _Plan:
             # Absolute: the runtime and the renew agent run with another cwd.
             self.token_file = (Path(os.path.expanduser(token_file)) if token_file
                                else path.with_name(args.id + "-token")).absolute()
-            if self.token_file.exists():
+            # A dangling symlink would be written through to its target.
+            if self.token_file.exists() or self.token_file.is_symlink():
                 raise ValueError(f"Token file {self.token_file} already exists; choose another path or ID")
         else:
             self.token_file = None
@@ -108,8 +109,10 @@ def _commit(plan: _Plan, url: str, issue, revoke, extra=None) -> dict:
 
     Backs up the config files, ``issue()``s a scoped session (returns the T3
     session JSON), verifies it against ``url``, stores it in Keychain (or the
-    plan's token file) and writes the config. Any failure after issuing restores the config files, clears the
-    stored credential and ``revoke(session_id)``s the session (best effort)."""
+    plan's token file) and writes the config. Any failure after issuing
+    restores the config files, clears the stored credential (with directories
+    created for the token file) and ``revoke(session_id)``s the session (best
+    effort)."""
     args, path, local_path, local = plan.args, plan.path, plan.local_path, plan.local
     originals, env = plan.originals, plan.env
     T3Http(url, "")
@@ -128,6 +131,9 @@ def _commit(plan: _Plan, url: str, issue, revoke, extra=None) -> dict:
             backup = p.with_name(p.name + "." + stamp + ".bak")
             shutil.copy2(p, backup)
             backups.append(str(backup))
+    # Token file parents write_token_file will create, deepest first.
+    new_dirs = ([d for d in plan.token_file.parents if not d.exists()]
+                if plan.token_file is not None else [])
     issued = issue()
     written = {}
     stored = False
@@ -164,6 +170,11 @@ def _commit(plan: _Plan, url: str, issue, revoke, extra=None) -> dict:
         if stored:
             if plan.token_file is not None:
                 plan.token_file.unlink(missing_ok=True)
+                for d in new_dirs:
+                    try:
+                        d.rmdir()  # Only while empty: never removes other files.
+                    except OSError:
+                        break
             else:
                 clear_secret(env)
         try:
@@ -301,11 +312,15 @@ def main():
     p.add_argument("--restart-label", help="Restart this GUI launchd runtime after successful renewal")
     p.add_argument("--install-renew-agent", action="store_true",
                    help=f"macOS: install {t3_remote.RENEW_LABEL} running --renew-all hourly (needs --restart-label)")
+    p.add_argument("--remove-renew-agent", action="store_true",
+                   help=f"macOS: unload and delete the {t3_remote.RENEW_LABEL} agent this tool installed")
     args = p.parse_args()
     try:
-        modes = [m for m in ("renew", "renew_all", "disconnect", "install_renew_agent") if getattr(args, m)]
+        modes = [m for m in ("renew", "renew_all", "disconnect", "install_renew_agent", "remove_renew_agent")
+                 if getattr(args, m)]
         if len(modes) > 1:
-            raise ValueError("Choose one of --renew, --renew-all, --disconnect, --install-renew-agent")
+            raise ValueError("Choose one of --renew, --renew-all, --disconnect, --install-renew-agent, "
+                             "--remove-renew-agent")
         if args.renew:
             from .t3_renew import renew
             renew(args)
@@ -317,6 +332,8 @@ def main():
             disconnect(args)
         elif args.install_renew_agent:
             install_renew_agent(args)
+        elif args.remove_renew_agent:
+            remove_renew_agent()
         else:
             connect(args)
     except Exception as exc:
@@ -330,6 +347,11 @@ def install_renew_agent(args):
         raise ValueError("--install-renew-agent needs --restart-label (the runtime's launchd label)")
     path = t3_remote.install_renew_agent(args.config.expanduser().resolve(), args.restart_label)
     print(json.dumps({"renew_agent": t3_remote.RENEW_LABEL, "plist": str(path)}))
+
+
+def remove_renew_agent():
+    removed = t3_remote.remove_renew_agent()
+    print(json.dumps({"renew_agent": t3_remote.RENEW_LABEL, "removed": removed}))
 
 
 def disconnect(args):

@@ -108,6 +108,78 @@ def test_renew_rewrites_the_token_file_the_runtime_reads_first(tmp_path, monkeyp
     assert path.read_text() == original
 
 
+def _rollback_env(tmp_path, monkeypatch, restore_fails=False, revoke_fails=False):
+    path = tmp_path / "config.toml"
+    path.write_text('[[servers]]\nid="t3"\nbackend="t3"\nurl="http://127.0.0.1:3773"\ntoken_env="TEST_T3_TOKEN"\n')
+    monkeypatch.delenv("TEST_T3_TOKEN", raising=False)
+    secret = {"value": "old-private"}
+    monkeypatch.setattr(t3_renew, "peek_keychain", lambda name: secret["value"])
+
+    def set_secret(name, value):
+        if value == "old-private" and restore_fails:
+            raise PermissionError("keychain says no to old-private")
+        secret["value"] = value
+    monkeypatch.setattr(t3_renew, "set_secret", set_secret)
+    calls = []
+
+    def issue(args, operation, session_id=None):
+        calls.append(operation)
+        if operation == "revoke" and revoke_fails:
+            raise subprocess.CalledProcessError(1, ["ssh"], output="new-private")
+        return dict(token="new-private", sessionId="new-id", expiresAt="2026-10-06T12:00:00Z")
+    monkeypatch.setattr(t3_renew, "issuer", issue)
+    monkeypatch.setattr(t3_renew.T3Http, "get", lambda http, route:
+                        {"orchestrationProtocolVersion": 2, "capabilities": {}} if route.endswith("environment")
+                        else dict(expiresAt="2020-01-01T00:00:00Z") if route.endswith("/session")
+                        else dict(threads=[], archivedThreads=[], projects=[]))
+
+    def run(*a, **kw):
+        raise OSError("launchd unavailable")  # the original failure, after storing
+    monkeypatch.setattr(t3_renew.subprocess, "run", run)
+    return argparse.Namespace(config=path, id="t3", restart_label="dev.herdeck.runtime"), secret, calls
+
+
+@pytest.mark.parametrize("restore_fails,revoke_fails", [(True, False), (False, True), (True, True)])
+def test_renew_rollback_failure_never_masks_the_original_error(tmp_path, monkeypatch, caplog,
+                                                                restore_fails, revoke_fails):
+    args, secret, calls = _rollback_env(tmp_path, monkeypatch, restore_fails, revoke_fails)
+    with pytest.raises(OSError, match="launchd unavailable") as exc:
+        t3_renew.renew(args)
+    notes = " ".join(getattr(exc.value, "__notes__", []))
+    assert ("restoring the previous credential of t3 failed (PermissionError)" in notes) == restore_fails
+    if restore_fails:
+        # The new token is what the runtime holds now: keep its session alive.
+        assert secret["value"] == "new-private" and calls == ["issue"]
+    else:
+        assert secret["value"] == "old-private" and calls == ["issue", "revoke"]
+        assert "revoking the new session of t3 failed (CalledProcessError)" in notes
+    assert "private" not in notes and "private" not in caplog.text and "failed" in caplog.text
+
+
+def test_renew_rewrites_a_symlinked_token_file_through_the_link(tmp_path, monkeypatch, capsys):
+    real = tmp_path / "vault/t3-token"
+    real.parent.mkdir()
+    real.write_text("old-private\n")
+    real.chmod(0o600)
+    link = tmp_path / "t3-token"
+    link.symlink_to(real)
+    path = tmp_path / "config.toml"
+    path.write_text(f'[[servers]]\nid="t3"\nbackend="t3"\nurl="http://127.0.0.1:3773"\ntoken_file="{link}"\n')
+    monkeypatch.setattr(t3_renew, "issuer", lambda args, operation, session_id=None:
+                        dict(token="new-private", sessionId="new-id", expiresAt="2026-10-06T12:00:00Z"))
+    monkeypatch.setattr(t3_renew.T3Http, "get", lambda http, route:
+                        {"orchestrationProtocolVersion": 2, "capabilities": {}} if route.endswith("environment")
+                        else dict(expiresAt="2020-01-01T00:00:00Z") if route.endswith("/session")
+                        else dict(threads=[], archivedThreads=[], projects=[]))
+    monkeypatch.setattr(t3_renew.subprocess, "run", lambda *a, **kw: None)
+    t3_renew.renew(argparse.Namespace(config=path, id="t3", restart_label="dev.herdeck.runtime"))
+    assert link.is_symlink() and link.resolve() == real.resolve()
+    assert real.read_text() == "new-private\n" and (real.stat().st_mode & 0o777) == 0o600
+    # The temp file was created next to the target, and nothing is left over.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.toml", "t3-token", "vault"]
+    assert list(real.parent.iterdir()) == [real]
+
+
 def _fake(tmp_path, version, exe=False, legacy=False):
     vdir = tmp_path / "runtime/versions" / version
     vdir.mkdir(parents=True)

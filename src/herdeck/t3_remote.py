@@ -49,8 +49,36 @@ def validate_ssh_target(value) -> str:
     return value
 
 
+_SERVER_ID = r"[a-zA-Z0-9_-]+"
+
+
+def validate_server_id(sid) -> str:
+    """A Herdeck server ID as ``t3_setup`` accepts it; it names a launchd label
+    and a log file, so nothing else (dots, slashes, spaces) may pass."""
+    if not isinstance(sid, str) or not re.fullmatch(_SERVER_ID, sid):
+        raise ValueError("Server ID must contain letters, digits, underscores or hyphens")
+    return sid
+
+
+def validate_forward_host(host) -> str:
+    """The remote side of an SSH ``-L`` forward, in the forms ``remote_runtime``
+    returns: an IPv4 address, a hostname, or a bracketed IPv6 address."""
+    if isinstance(host, str):
+        inner = host[1:-1] if host.startswith("[") and host.endswith("]") else None
+        try:
+            if inner is not None:
+                if ipaddress.ip_address(inner).version == 6:
+                    return host
+            elif ipaddress.ip_address(host).version == 4:
+                return host
+        except ValueError:
+            if inner is None and re.fullmatch(_HOST, host):
+                return host
+    raise ValueError("Invalid remote T3 host for the SSH forward")
+
+
 def forward_label(sid: str) -> str:
-    return FORWARD_PREFIX + sid
+    return FORWARD_PREFIX + validate_server_id(sid)
 
 
 def agents_dir() -> Path:
@@ -170,6 +198,7 @@ def forward_plist(sid: str, target: str, local_port: int, remote_port: int,
     validate_ssh_target(target)
     check_port(local_port, "--local-port")
     check_port(remote_port, "--remote-port")
+    validate_forward_host(remote_host)
     label = forward_label(sid)
     log = str(logs_dir() / f"t3-forward.{sid}.log")
     return {
@@ -240,6 +269,31 @@ def renew_plist(config: Path, restart_label: str) -> dict:
 
 
 def install_renew_agent(config: Path, restart_label: str) -> Path:
+    if getattr(sys, "frozen", False):
+        # renew_plist runs `sys.executable -m herdeck.t3_setup` with PYTHONPATH
+        # set to this package: a frozen app binary is neither a Python
+        # interpreter nor a source tree, so the agent could never run.
+        raise ValueError("--install-renew-agent cannot run from the packaged app; run it with "
+                         "`python -m herdeck.t3_setup` from a Herdeck Python checkout")
     if sys.platform != "darwin":
         raise ValueError("--install-renew-agent needs macOS launchd")
     return _bootstrap(RENEW_LABEL, renew_plist(config, restart_label))
+
+
+def remove_renew_agent() -> bool:
+    """Unload and delete the renew LaunchAgent; False when it was absent.
+
+    Only a plist whose ``Label`` is :data:`RENEW_LABEL` is touched, so a
+    hand-made file that merely shares the name is refused, not deleted."""
+    if sys.platform != "darwin":
+        raise ValueError("--remove-renew-agent needs macOS launchd")
+    path = agents_dir() / f"{RENEW_LABEL}.plist"
+    if not path.exists():
+        return False
+    try:
+        label = plistlib.loads(path.read_bytes()).get("Label")
+    except Exception:
+        label = None
+    if label != RENEW_LABEL:
+        raise ValueError(f"{path} is not the {RENEW_LABEL} agent this tool installs; left in place")
+    return remove_agent(RENEW_LABEL)

@@ -435,3 +435,81 @@ def test_main_rejects_two_modes(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         t3_setup.main()
     assert exc.value.code == 1 and "Choose one of" in capsys.readouterr().err
+
+
+def test_main_rejects_remove_renew_agent_with_another_mode(monkeypatch, capsys):
+    monkeypatch.setattr(t3_setup.sys, "argv", ["t3_setup", "--install-renew-agent", "--remove-renew-agent"])
+    with pytest.raises(SystemExit) as exc:
+        t3_setup.main()
+    assert exc.value.code == 1 and "--remove-renew-agent" in capsys.readouterr().err
+
+
+def test_remove_renew_agent_unloads_and_deletes_only_its_own_agent(env, capsys, monkeypatch):
+    path = t3_remote.install_renew_agent(env.path, "dev.herdeck.runtime")
+    monkeypatch.setattr(t3_setup.sys, "argv", ["t3_setup", "--remove-renew-agent"])
+    t3_setup.main()
+    assert json.loads(capsys.readouterr().out) == {"renew_agent": "com.herdeck.t3-renew", "removed": True}
+    assert not path.exists()
+    assert env.fake.launchctl("bootout")[-1][-1].endswith("/com.herdeck.t3-renew")
+    t3_setup.main()
+    assert json.loads(capsys.readouterr().out)["removed"] is False
+    # A file that merely shares the name is not ours: refused and left in place.
+    path.write_bytes(plistlib.dumps({"Label": "someone.else"}))
+    with pytest.raises(SystemExit) as exc:
+        t3_setup.main()
+    assert exc.value.code == 1 and "not the com.herdeck.t3-renew agent" in capsys.readouterr().err
+    assert path.exists() and len(env.fake.launchctl("bootout")) == 1
+
+
+def test_install_renew_agent_refuses_a_frozen_build(env, monkeypatch):
+    monkeypatch.setattr(t3_remote.sys, "frozen", True, raising=False)
+    with pytest.raises(ValueError, match="packaged app.*python -m herdeck.t3_setup"):
+        t3_remote.install_renew_agent(env.path, "dev.herdeck.runtime")
+    assert not (env.tmp / "LaunchAgents").exists() and env.fake.launchctl("bootstrap") == []
+
+
+@pytest.mark.parametrize("sid", ["", "a.b", "../x", "x y", "x/y", None])
+def test_forward_helpers_validate_the_server_id(env, sid):
+    for call in (lambda: t3_remote.forward_label(sid),
+                 lambda: t3_remote.forward_plist(sid, TARGET, 13774, 3773),
+                 lambda: t3_remote.install_forward(sid, TARGET, 13774, 3773),
+                 lambda: t3_remote.remove_forward(sid)):
+        with pytest.raises(ValueError, match="Server ID"):
+            call()
+    assert not (env.tmp / "LaunchAgents").exists()
+
+
+@pytest.mark.parametrize("host,ok", [
+    ("127.0.0.1", True), ("10.0.0.5", True), ("t3.example", True), ("[::1]", True),
+    ("[fd00::5]", True), ("::1", False), ("[10.0.0.1]", False), ("h -R9:x:9", False),
+    ("h:22", False), ("", False), (None, False), ("-oProxyCommand=x", False),
+])
+def test_forward_plist_validates_the_remote_host(host, ok):
+    if ok:
+        arg = t3_remote.forward_plist("t3-m4mini", TARGET, 13774, 3773, host)["ProgramArguments"][-2]
+        assert arg == f"127.0.0.1:13774:{host}:3773"
+    else:
+        with pytest.raises(ValueError, match="remote T3 host"):
+            t3_remote.forward_plist("t3-m4mini", TARGET, 13774, 3773, host)
+
+
+def test_token_file_rollback_removes_directories_it_created(env, tmp_path, monkeypatch):
+    (tmp_path / "keep").mkdir()
+    token = tmp_path / "keep/new/deeper/m4"
+
+    def fail_after_write(*a, **kw):  # the first step after the token file is written
+        assert token.is_file()
+        raise ValueError("Active profile excludes T3")
+    monkeypatch.setattr(t3_setup, "resolve_profile", fail_after_write)
+    with pytest.raises(ValueError, match="excludes"):
+        t3_setup.connect(_args(env, remote_port=3773, token_file=str(token)))
+    assert not (tmp_path / "keep/new").exists() and (tmp_path / "keep").is_dir()
+    assert env.fake.issuer_ops == [("issue", None), ("revoke", "sess-r")]
+
+
+def test_token_file_refuses_a_dangling_symlink_before_issuing(env, tmp_path):
+    link = tmp_path / "link-token"
+    link.symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="already exists"):
+        t3_setup.connect(_args(env, remote_port=3773, token_file=str(link)))
+    assert not (tmp_path / "elsewhere").exists() and env.fake.issuer_ops == []
