@@ -320,12 +320,11 @@ def panel_overview(
     page = (page_index, page_count) if page_count > 1 else None
     partial = bool(down) and servers is not None and len(down) < servers
     note = ""
-    if partial:
-        note = (
-            tr(lang, "server_offline", name=names.get(sid := next(iter(down)), sid))
-            if len(down) == 1
-            else tr(lang, "servers_offline", n=len(down))
-        )
+    if partial and len(down) == 1:
+        (sid,) = down
+        note = tr(lang, "server_offline", name=names.get(sid, sid))
+    elif partial:
+        note = tr(lang, "servers_offline", n=len(down))
     if down and not partial:
         sub = ", ".join(sorted(names.get(sid, sid) for sid in down))
         if counts.blocked:

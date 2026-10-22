@@ -438,6 +438,16 @@ def test_offline_panel_still_reports_blocked_agents():
     assert pv.lines == ["down-server · 2 waiting for you"]
 
 
+def test_partial_outage_note_names_the_down_server_by_its_label():
+    names = {"m4": "M4"}
+    one = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"m4"}, 1, None, servers=2, names=names)
+    assert one.note == "M4 offline"
+    unnamed = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"nep"}, 1, None, servers=2, names=names)
+    assert unnamed.note == "nep offline"
+    two = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"m4", "nep"}, 1, None, servers=3, names=names)
+    assert two.note == "2 servers offline"
+
+
 def test_panel_overview_renders_czech_when_asked():
     pv = panel_overview(Counts(2, 1, 0, 0), 0, 1, set(), 3, ("api", "4m"), lang="cs")
     assert pv.title == "Čeká na tebe: 2"
