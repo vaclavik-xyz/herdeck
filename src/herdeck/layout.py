@@ -118,7 +118,12 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     """
     parts: list[str] = []
     for token in tokens:
-        if token == "project":
+        if state.no_project and token in ("project", "repo", "tab", "title"):
+            # A project-less T3 thread: its title is the meaningful name, so it
+            # takes the project's (headline) place and the title/tab line
+            # shows the muted "No project" label instead of repeating it.
+            value = state.title if token in ("project", "repo") else state.project
+        elif token == "project":
             value = project_name(state)
         elif token == "repo":
             # T3 projects have editable display names; workspaceRoot is a path,
@@ -147,7 +152,7 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
             value = state.metadata.get(token[1:], "")
         else:
             value = ""
-        if value:
+        if value and not (state.no_project and value in parts):
             parts.append(value)
     return " · ".join(parts)
 

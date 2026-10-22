@@ -203,6 +203,10 @@ class AgentState:
     # Content hash of the project's favicon (bridge discovery), "" when none or
     # when the bridge predates the "project_icon" capability.
     project_icon: str = ""
+    # A T3 thread created without a project (T3 files it under its scratch
+    # bucket, or names no known project). The tile then headlines the thread
+    # title and shows a neutral "no project" glyph instead of a monogram.
+    no_project: bool = False
     # Unix ms when the pane entered its current status, stamped by the bridge
     # ("status_since" capability). None from an older bridge or another
     # backend; the orchestrator then times the status from first sight.

@@ -212,6 +212,7 @@ def test_detail_carries_the_full_prompt_options_and_header():
     assert [o["key"] for o in detail["options"]] == ["1", "2", "3"]
     assert detail["connected"] is True
     assert detail["stop_confirm"] is True  # act_force needs a second press by default
+    assert detail["no_project"] is False  # only a project-less T3 thread sets it
     assert "token" not in json.dumps(detail)
 
 

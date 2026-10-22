@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 
 from PIL import Image
 
-from .icons import _default_rasterize, decode_project_icon, project_mark_image
+from .icons import _default_rasterize, decode_project_icon, no_project_image, project_mark_image
 from .project_icons import ProjectIconStore, default_store
 
 log = logging.getLogger(__name__)
@@ -73,6 +73,12 @@ class NotificationIconCache:
                         return path
                     stored = self._store.get(resolved)
                     image = self._decode(stored) if stored is not None else None
+                if image is None and getattr(state, "no_project", False):
+                    # A project-less T3 thread: the deck's neutral glyph.
+                    path = self._path("g-no-project")
+                    if self._reuse(path):
+                        return path
+                    image = no_project_image()
                 if image is None:
                     path = self._path("m-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:16])
                     if self._reuse(path):

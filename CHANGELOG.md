@@ -22,6 +22,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounded), so two T3 servers are no longer both just `T3`. Single-server
   setups keep their tags.
 
+### Changed
+- T3: a thread created without a project (T3's scratch "No project" bucket)
+  headlines its own title with a muted "No project" / "Bez projektu" line, and
+  with `[view].tile_icon = "project"`/`"both"` shows a grey Lucide
+  `message-square-dashed` glyph instead of a meaningless monogram. The desktop
+  agent card and done notifications follow suit.
+
 ### Fixed
 - `python -m herdeck.t3_setup` discovers the local T3 server from the
   `origin` that current T3 writes to `server-runtime.json` (it required the
