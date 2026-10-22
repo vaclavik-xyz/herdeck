@@ -137,11 +137,12 @@ def check_servers(servers, probe) -> list[Check]:
     return checks
 
 
-def _t3_descriptor(url: str, token: str = "") -> dict:
-    """The public ``/.well-known/t3/environment`` descriptor (no token needed)."""
+def _t3_descriptor(url: str) -> dict:
+    """The public ``/.well-known/t3/environment`` descriptor, fetched without
+    a credential (the endpoint needs none; no token leaves for it)."""
     from .t3_client import T3Http
 
-    return T3Http(url, token, timeout=T3_DESCRIPTOR_TIMEOUT).get("/.well-known/t3/environment")
+    return T3Http(url, "", timeout=T3_DESCRIPTOR_TIMEOUT).get("/.well-known/t3/environment")
 
 
 def _t3_identity(descriptor) -> tuple[str, str] | None:
@@ -185,7 +186,7 @@ def check_t3_environments(servers, local_origin: str | None, fetch) -> list[Chec
     a T3 server running on this machine is left unconnected or one environment is
     connected twice (each thread would get two tiles).
 
-    ``fetch(url, token) -> descriptor dict`` (raises on failure);
+    ``fetch(url) -> descriptor dict`` (raises on failure);
     ``local_origin`` is this machine's T3 origin from server-runtime.json, or None.
     Unreachable descriptors are reported, never fatal: connectivity itself is
     the per-server check's job."""
@@ -196,7 +197,7 @@ def check_t3_environments(servers, local_origin: str | None, fetch) -> list[Chec
     parts = []
     for server in t3_servers:
         try:
-            identity = _t3_identity(fetch(server.url, server.token))
+            identity = _t3_identity(fetch(server.url))
         except Exception:
             identity = None
         if identity is None:
@@ -220,7 +221,7 @@ def check_t3_environments(servers, local_origin: str | None, fetch) -> list[Chec
             ))
     if local_origin is not None:
         try:
-            identity = _t3_identity(fetch(local_origin, ""))
+            identity = _t3_identity(fetch(local_origin))
         except Exception:
             identity = None
         if identity is not None:

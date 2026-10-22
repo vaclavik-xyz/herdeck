@@ -688,8 +688,8 @@ _ENVS = {
 def _fake_fetch(table):
     calls = []
 
-    def fetch(url, token):
-        calls.append((url, token))
+    def fetch(url):
+        calls.append(url)
         answer = table.get(url)
         if isinstance(answer, Exception):
             raise answer
@@ -759,8 +759,7 @@ def test_t3_unreachable_descriptor_does_not_crash():
     checks = check_t3_environments([_t3("t3-bench", _TUNNEL)], _LOCAL, fetch)
     assert [c.name for c in checks] == ["T3 environments"]
     assert checks[0].ok and "t3-bench=descriptor unavailable" in checks[0].detail
-    # the local server's descriptor is fetched without a credential
-    assert (_LOCAL, "") in fetch.calls
+    assert fetch.calls == [_TUNNEL, _LOCAL]
 
 
 def test_t3_environments_skipped_without_t3():
