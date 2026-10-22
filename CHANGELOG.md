@@ -6,6 +6,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `herdeck-doctor` lists which T3 environment (label, `environmentId`) each
+  configured T3 server reaches, warns when a T3 server running on this machine
+  is not connected (with the `herdeck.t3_setup` command to connect it), and
+  warns when two configured servers reach the same T3 environment (duplicate
+  tiles). Warnings are marked `!` and do not fail doctor.
+
+### Fixed
+- `python -m herdeck.t3_setup` discovers the local T3 server from the
+  `origin` that current T3 writes to `server-runtime.json` (it required the
+  older `host` key and failed).
+
 ## [0.16.0] - 2026-10-22
 
 ### Added

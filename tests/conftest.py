@@ -45,6 +45,15 @@ def _isolated_agent_hook_files(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_local_t3_discovery(monkeypatch):
+    """herdeck-doctor never reads the real ~/.t3 runtime file nor contacts a
+    T3 server running on the developer's machine."""
+    from herdeck import doctor
+
+    monkeypatch.setattr(doctor, "_local_t3_origin", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_usage_agent(tmp_path, monkeypatch):
     """The usage agent's file (usage_agent.py) and the bridge's usage agent
     installer (usage_agent_install.py) never touch ~/.local/state,

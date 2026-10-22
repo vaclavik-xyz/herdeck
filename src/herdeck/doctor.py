@@ -19,6 +19,7 @@ from .secrets import get_secret
 
 SOCKET_TIMEOUT = 1.0
 SERVER_PROBE_TIMEOUT = 2.0
+T3_DESCRIPTOR_TIMEOUT = 2.0
 
 
 @dataclass
@@ -26,6 +27,8 @@ class Check:
     name: str
     ok: bool
     detail: str
+    # An advisory finding: printed with "!" but does not fail doctor (exit 0).
+    warning: bool = False
 
 
 def check_socket(path: str, exists: Callable[[str], bool], probe) -> Check:
@@ -131,6 +134,110 @@ def check_servers(servers, probe) -> list[Check]:
         ok, notes = _bridge_notes(result or {})
         detail = "; ".join([f"{server.url} answered with a snapshot", *notes])
         checks.append(Check(name, ok, detail))
+    return checks
+
+
+def _t3_descriptor(url: str, token: str = "") -> dict:
+    """The public ``/.well-known/t3/environment`` descriptor (no token needed)."""
+    from .t3_client import T3Http
+
+    return T3Http(url, token, timeout=T3_DESCRIPTOR_TIMEOUT).get("/.well-known/t3/environment")
+
+
+def _t3_identity(descriptor) -> tuple[str, str] | None:
+    """(environmentId, label) from a descriptor, or None when it has no id."""
+    if not isinstance(descriptor, dict):
+        return None
+    env_id = descriptor.get("environmentId")
+    if not isinstance(env_id, str) or not env_id:
+        return None
+    label = descriptor.get("label")
+    return env_id, label if isinstance(label, str) and label else "unnamed"
+
+
+def _local_t3_origin() -> str | None:
+    from .t3_client import local_runtime_origin
+
+    try:
+        return local_runtime_origin(Path.home() / ".t3")
+    except Exception:
+        return None
+
+
+def _suggest_t3_id(env_label: str, taken: set[str]) -> str:
+    import re
+
+    candidates = ["t3-local"]
+    slug = re.sub(r"[^a-z0-9]+", "-", env_label.lower()).strip("-")
+    if slug and slug != "unnamed":
+        candidates.append(f"t3-{slug}")
+    for candidate in candidates:
+        if candidate not in taken:
+            return candidate
+    n = 2
+    while f"t3-local-{n}" in taken:
+        n += 1
+    return f"t3-local-{n}"
+
+
+def check_t3_environments(servers, local_origin: str | None, fetch) -> list[Check]:
+    """Which T3 environment each configured T3 server reaches, and whether
+    a T3 server running on this machine is left unconnected or one environment is
+    connected twice (each thread would get two tiles).
+
+    ``fetch(url, token) -> descriptor dict`` (raises on failure);
+    ``local_origin`` is this machine's T3 origin from server-runtime.json, or None.
+    Unreachable descriptors are reported, never fatal: connectivity itself is
+    the per-server check's job."""
+    t3_servers = [s for s in servers if s.backend == "t3"]
+    checks: list[Check] = []
+    seen: dict[str, list[str]] = {}
+    labels: dict[str, str] = {}
+    parts = []
+    for server in t3_servers:
+        try:
+            identity = _t3_identity(fetch(server.url, server.token))
+        except Exception:
+            identity = None
+        if identity is None:
+            parts.append(f"{server.id}=descriptor unavailable")
+            continue
+        env_id, label = identity
+        labels[env_id] = label
+        seen.setdefault(env_id, []).append(server.id)
+        parts.append(f"{server.id}={label} ({env_id[:8]})")
+    if parts:
+        checks.append(Check("T3 environments", True, "; ".join(parts)))
+    for env_id, ids in seen.items():
+        if len(ids) > 1:
+            names = ", ".join(f"'{i}'" for i in ids)
+            checks.append(Check(
+                "T3 duplicate connection", True,
+                f"servers {names} reach the same T3 environment {labels[env_id]} "
+                f"({env_id[:8]}); every thread shows twice on the deck. Keep one: "
+                f"python -m herdeck.t3_setup --disconnect --id {ids[-1]}",
+                warning=True,
+            ))
+    if local_origin is not None:
+        try:
+            identity = _t3_identity(fetch(local_origin, ""))
+        except Exception:
+            identity = None
+        if identity is not None:
+            env_id, label = identity
+            if env_id in seen:
+                ids = ", ".join(f"'{i}'" for i in seen[env_id])
+                checks.append(Check(
+                    "local T3 server", True, f"{label} at {local_origin} is connected as {ids}"
+                ))
+            else:
+                sid = _suggest_t3_id(label, {s.id for s in servers})
+                checks.append(Check(
+                    "local T3 server", True,
+                    f"{label} ({env_id[:8]}) runs at {local_origin} but no configured server "
+                    f"reaches it; connect it: python -m herdeck.t3_setup --id {sid}",
+                    warning=True,
+                ))
     return checks
 
 
@@ -371,7 +478,7 @@ def _subagent_hook_status(agent: str) -> dict:
 def format_report(checks: Iterable[Check]) -> str:
     lines = ["herdeck doctor"]
     for check in checks:
-        mark = "✓" if check.ok else "✗"
+        mark = "✗" if not check.ok else "!" if check.warning else "✓"
         lines.append(f"{mark} {check.name}: {check.detail}")
     return "\n".join(lines)
 
@@ -622,6 +729,9 @@ def collect_checks(web_url: str | None = None) -> list[Check]:
     # Actually contact each configured server — token presence alone said
     # nothing about a dead bridge, a wrong URL or a rejected token.
     checks.extend(check_servers(servers, _probe_server))
+    # Which T3 environment each server reaches, plus an unconnected T3 on
+    # this machine or one environment connected twice (advisory warnings).
+    checks.extend(check_t3_environments(servers, _local_t3_origin(), _t3_descriptor))
     from .deckapp.discovery import read_runtime_file
 
     checks.extend(
