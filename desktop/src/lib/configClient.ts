@@ -234,6 +234,8 @@ export interface ServerRecord {
   id: string;
   url: string;
   token_env: string;
+  /** Optional short display name (e.g. "M4") shown as the tile's server tag. */
+  label?: string;
   /** Path to a 0600 file holding the token; read after the env var, before the keychain. */
   token_file?: string;
   backend?: string;
@@ -278,6 +280,7 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
   return raw.map((s) => {
     const r = obj(s);
     return { id: str(r.id), url: str(r.url), token_env: str(r.token_env),
+      ...(typeof r.label === "string" ? { label: r.label } : {}),
       ...(typeof r.token_file === "string" ? { token_file: r.token_file } : {}),
       ...(typeof r.backend === "string" ? { backend: r.backend } : {}),
       ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}) };
@@ -286,8 +289,11 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
 
 /** The TOML shape of a record: a blank `token_file` is dropped (the backend
  *  rejects an empty path), and so is a blank `token_env` next to a token file —
- *  a file-only server is valid, an empty env-var name is not. */
-function normalizeServer(s: ServerRecord): ServerRecord {
+ *  a file-only server is valid, an empty env-var name is not. A blank `label`
+ *  is dropped too (no label = the backend name on the tile). */
+function normalizeServer(record: ServerRecord): ServerRecord {
+  const { label, ...unlabelled } = record;
+  const s: ServerRecord = (label ?? "").trim() ? { ...unlabelled, label } : unlabelled;
   const { token_file, ...rest } = s;
   const file = (token_file ?? "").trim() ? token_file : undefined;
   if (file === undefined) return rest;

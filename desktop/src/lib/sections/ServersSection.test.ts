@@ -50,3 +50,64 @@ describe("ServersSection token_file", () => {
     });
   }
 });
+
+describe("ServersSection label", () => {
+  function mountWith(servers: unknown[]) {
+    let payload = parseConfig({ base: { servers } })!;
+    const target = document.createElement("div");
+    const instance = mount(ServersSection, {
+      target,
+      props: {
+        get payload() { return payload; },
+        set payload(v) { payload = v; },
+        onChange: () => {},
+        onError: () => {},
+      },
+    });
+    flushSync();
+    return { target, instance, get payload() { return payload; } };
+  }
+
+  for (const lang of ["en", "cs"] as const) {
+    it(`edits label with its ${lang} tooltip and drops a blank one`, () => {
+      setLang(lang);
+      const view = mountWith([{ id: "m4", url: "ws://x", token_env: "T", backend: "t3" }]);
+      try {
+        const label = view.target.querySelector<HTMLElement>('[data-config-key="label"]');
+        expect(label?.closest(".fieldlabel, [title]")?.getAttribute("title")
+          ?? label?.getAttribute("title")).toBe(FIELD_HELP[lang].servers.label);
+        const input = inputFor(view.target, "label");
+        input.value = "M4";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        flushSync();
+        expect(view.payload.base.servers).toEqual([
+          { id: "m4", url: "ws://x", token_env: "T", backend: "t3", label: "M4" },
+        ]);
+        input.value = "  ";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        flushSync();
+        expect(view.payload.base.servers).toEqual([
+          { id: "m4", url: "ws://x", token_env: "T", backend: "t3" },
+        ]);
+      } finally {
+        unmount(view.instance);
+        setLang("en");
+      }
+    });
+  }
+
+  it("keeps a stored label when another field is edited", () => {
+    const view = mountWith([{ id: "m4", url: "ws://x", token_env: "T", label: "M4" }]);
+    try {
+      const input = inputFor(view.target, "url");
+      input.value = "ws://y";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      expect(view.payload.base.servers).toEqual([
+        { id: "m4", url: "ws://y", token_env: "T", label: "M4" },
+      ]);
+    } finally {
+      unmount(view.instance);
+    }
+  });
+});

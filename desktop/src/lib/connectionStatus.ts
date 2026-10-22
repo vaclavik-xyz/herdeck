@@ -16,6 +16,8 @@ export interface LocalConnectionRow {
 export interface RemoteConnectionRow {
   kind: "remote";
   id: string;
+  /** Configured display name ([[servers]].label), "" when none. */
+  label: string;
   url: string;
   active: boolean;
   health: ConnectionHealth;
@@ -62,6 +64,7 @@ export function connectionInventory(
     return {
       kind: "remote",
       id: server.id,
+      label: (server.label ?? "").trim(),
       url: server.url,
       active,
       health: !active
