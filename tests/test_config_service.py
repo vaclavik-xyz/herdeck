@@ -445,3 +445,25 @@ def test_validate_for_write_matches_write_semantics(tmp_path, monkeypatch):
     }
     assert svc.validate_for_write(body) == []  # write() would accept this
     assert svc.validate(body) != []  # ...though full resolution needs the secret
+
+
+def test_write_round_trips_server_label(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "real")
+    monkeypatch.setattr(secret_store, "_keyring", _FakeKeyring)
+    svc = _svc(tmp_path)
+    payload = svc.read()
+    payload["base"]["servers"][0]["label"] = "M4"
+    errors = svc.write(
+        {
+            "base": payload["base"],
+            "profiles": payload["profiles"],
+            "local": payload["local"],
+            "revision": payload["revision"],
+        }
+    )
+    assert errors == []
+    assert svc.read()["base"]["servers"][0]["label"] == "M4"
+    from herdeck.settings import load_settings, resolve_profile
+
+    resolved = resolve_profile(load_settings(tmp_path / "config.toml", tmp_path / "local.toml"))
+    assert resolved.config.servers[0].label == "M4"

@@ -878,3 +878,73 @@ def test_usage_detail_press_refused_when_all_servers_down():
     o.set_connection("t3-headless", False)
     o.on_press(13)
     assert o._usage_detail_until == 0.0
+
+
+def _two_t3_config(**labels):
+    servers = [
+        ServerConfig("t3-headless", "http://a:3773", "t", backend="t3", label=labels.get("a")),
+        ServerConfig("t3-m4mini", "http://b:3773", "t", backend="t3", label=labels.get("b")),
+    ]
+    return Config(
+        servers=servers,
+        profiles={"default": AnswerProfile(["enter"], ["esc"], ["ctrl+c"], ["enter"])},
+        overview_order=["t3-headless", "t3-m4mini"],
+        grid=(5, 3),
+    )
+
+
+def _t3_tags(o):
+    o.apply_snapshot(
+        "t3-headless",
+        [AgentState(AgentKey("t3-headless", "a"), "codex", "ra", Status.IDLE, backend="t3")],
+    )
+    o.apply_snapshot(
+        "t3-m4mini",
+        [AgentState(AgentKey("t3-m4mini", "b"), "codex", "rb", Status.IDLE, backend="t3")],
+    )
+    return sorted(tile.server_tag for tile in o.render().tiles if tile.repo)
+
+
+def test_configured_server_label_is_the_tile_tag():
+    o = Orchestrator(_two_t3_config(a="NEP", b="M4"), slots=13)
+    o.set_server_label("t3-m4mini", "Jupiter-M4mini")  # the configured label still wins
+    assert _t3_tags(o) == ["M4", "NEP"]
+
+
+def test_descriptor_label_tells_two_t3_servers_apart():
+    o = Orchestrator(_two_t3_config(), slots=13)
+    assert _t3_tags(o) == ["T3", "T3"]
+    assert o.set_server_label("t3-m4mini", "Jupiter-M4mini") is True
+    assert o.set_server_label("t3-m4mini", "Jupiter-M4mini") is False
+    assert _t3_tags(o) == ["Jupiter-M4mini", "T3"]
+    assert o.set_server_label("t3-m4mini", None) is True
+    assert _t3_tags(o) == ["T3", "T3"]
+
+
+def test_single_server_tag_unchanged_without_configured_label():
+    from herdeck.orchestrator import server_tag
+
+    single = [ServerConfig("t3", "http://a:3773", "t", backend="t3")]
+    assert server_tag("t3", "t3", single, {"t3": "Jupiter-M4mini"}) == "T3"
+    # One T3 next to one herdr: each backend is alone, the tags already differ.
+    mixed = single + [ServerConfig("dev", "ws://x", "t")]
+    assert server_tag("t3", "t3", mixed, {"t3": "Jupiter-M4mini"}) == "T3"
+    assert server_tag("dev", "herdr", mixed, {}) == "HERDR"
+    labelled = [ServerConfig("dev", "ws://x", "t", label="MB")]
+    assert server_tag("dev", "herdr", labelled, {}) == "MB"
+
+
+def test_deck_text_names_a_server_by_its_configured_label():
+    cfg = _two_server_config()
+    cfg.servers[1].label = "NEP"
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [state("p1", Status.IDLE)])
+    o.set_connection("dev", True)
+    o.set_connection("t3-headless", True)
+    o.set_connection("t3-headless", False)
+    assert o.render().panel.note == "NEP offline"
+    o.set_connection("dev", False)
+    assert o.render().panel.lines[0] == "NEP, dev"
+    cfg.overview_order = ["t3-headless", "dev"]
+    o._launcher = True
+    assert "on NEP" in o.render().panel.lines

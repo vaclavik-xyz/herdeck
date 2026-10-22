@@ -332,7 +332,32 @@ def _server_config(raw: dict) -> ServerConfig:
             T3Http(raw["url"], token)
         except ValueError as exc:
             raise ConfigError(str(exc)) from None
-    return ServerConfig(raw["id"], raw["url"], token, backend, desktop_read_state)
+    return ServerConfig(
+        raw["id"], raw["url"], token, backend, desktop_read_state, _server_label(raw)
+    )
+
+
+# A server label is a tile tag: a few characters that fit the bottom band of a
+# 196px tile next to the pin (longer text would only be ellipsized away).
+SERVER_LABEL_MAX = 16
+
+
+def _server_label(raw: dict) -> str | None:
+    """The validated, stripped ``label`` of a ``[[servers]]`` entry (None when
+    absent or blank)."""
+    value = raw.get("label")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"server '{raw.get('id')}': label must be a string")
+    label = value.strip()
+    if any(ch < " " or ch == "\x7f" for ch in label):
+        raise ConfigError(f"server '{raw.get('id')}': label must not contain control characters")
+    if len(label) > SERVER_LABEL_MAX:
+        raise ConfigError(
+            f"server '{raw.get('id')}': label is longer than {SERVER_LABEL_MAX} characters"
+        )
+    return label or None
 
 
 def _theme_config(raw: dict | None) -> ThemeConfig:

@@ -295,6 +295,7 @@ def panel_overview(
     sent: str = "",
     down_for: str = "",
     left: int | None = None,
+    names: dict[str, str] | None = None,
 ) -> PanelView:
     """The overview status panel: calm counts, NEEDS YOU, or OFFLINE.
 
@@ -307,19 +308,21 @@ def panel_overview(
     ``down_for`` is how long the full outage has lasted; ``left`` is how many
     blocked agents still await an answer (answered episodes excluded — the
     bridge's status change lags the answer), defaulting to ``counts.blocked``.
+    ``names`` maps a server id to the name shown for it (its configured label).
     """
     colors = colors or {}
+    names = names or {}
     page = (page_index, page_count) if page_count > 1 else None
     partial = bool(down) and servers is not None and len(down) < servers
     note = ""
     if partial:
         note = (
-            tr(lang, "server_offline", name=next(iter(down)))
+            tr(lang, "server_offline", name=names.get(sid := next(iter(down)), sid))
             if len(down) == 1
             else tr(lang, "servers_offline", n=len(down))
         )
     if down and not partial:
-        sub = ", ".join(sorted(down))
+        sub = ", ".join(sorted(names.get(sid, sid) for sid in down))
         if counts.blocked:
             # one dead server must not hide that agents are waiting for input
             sub = f"{sub} · {tr(lang, 'blocked_count', n=counts.blocked)}"
