@@ -1,4 +1,8 @@
-"""Renew the same T3 connection via its issuer; secrets remain in Keychain.
+"""Renew the same T3 connection via its issuer.
+
+The credential is renewed where the runtime reads it: the server's
+``token_file`` when one is configured (the runtime prefers it to the Keychain),
+else the Keychain entry named ``token_env``.
 
 The issuing host must already trust the caller's SSH key. This does not install
 keys or create network routes. launchd must run it in the user's GUI domain so
@@ -10,10 +14,12 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .config import ConfigError
 from .secrets import peek_keychain, set_secret
 from .t3_actions import negotiate
 from .t3_client import T3Client, T3Error, T3Http
@@ -102,14 +108,57 @@ def issuer(args, operation, session_id=None):
 RENEW_WINDOW = 7 * 86400
 
 
-def _renewable(server: dict) -> str:
-    """The Keychain account of ``server``; raises when it cannot be renewed."""
-    env = server.get("token_env")
-    if not env:
-        raise ValueError("Renewal requires a Keychain credential (token_env); token_file servers are renewed by hand")
-    if os.environ.get(env):
-        raise ValueError("Renewal requires Keychain credentials; remove the environment override")
-    return env
+class _Credential:
+    """Where the runtime reads a server's token, so renewal replaces that one:
+    its ``token_file`` when the file exists (the runtime reads it before the
+    Keychain, so renewing only the Keychain would leave the runtime on a revoked
+    token), else the Keychain entry named ``token_env``. Raises when the server
+    cannot be renewed."""
+
+    def __init__(self, server: dict):
+        env = server.get("token_env")
+        path = server.get("token_file")
+        if env and os.environ.get(env):
+            raise ValueError("Renewal cannot replace an environment override; remove it")
+        path = Path(os.path.expanduser(path.strip())) if isinstance(path, str) and path.strip() else None
+        # Same order as the runtime: an absent token_file falls through to the Keychain.
+        if path is not None and (path.exists() or not env):
+            self.path, self.env = path, None
+        elif env:
+            self.path, self.env = None, env
+        else:
+            raise ValueError("Renewal requires token_env or token_file")
+        self.server_id = str(server.get("id"))
+
+    def read(self) -> str | None:
+        """The stored token, None when absent; raises when unreadable, so an
+        unreadable credential is never overwritten."""
+        if self.path is None:
+            return peek_keychain(self.env)
+        from .settings import _read_token_file
+        try:
+            return _read_token_file(self.server_id, self.path)
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from None
+
+    def write(self, token: str) -> None:
+        if self.path is None:
+            set_secret(self.env, token)
+            return
+        # Atomic, owner-only: the runtime refuses a token file others can read.
+        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix="." + self.path.name + ".")
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, (token + "\n").encode())
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            os.replace(tmp, self.path)
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def _check_label(label):
@@ -129,10 +178,10 @@ def _renew_one(args, server: dict, original: str, restart_label=None) -> dict:
     ``binary`` and ``config``. With ``restart_label`` the runtime is restarted
     inside the transaction (a failed restart rolls the credential back);
     without it the caller restarts. Returns the JSON-safe result (no tokens)."""
-    env = _renewable(server)
-    old = peek_keychain(env)  # An unreadable Keychain must never be overwritten.
+    credential = _Credential(server)
+    old = credential.read()  # An unreadable credential must never be overwritten.
     if not old:
-        raise ValueError("Existing Keychain credential is missing")
+        raise ValueError("Existing credential is missing")
     expires = None
     try:
         session = T3Http(server["url"], old).get("/api/auth/session")
@@ -150,15 +199,15 @@ def _renew_one(args, server: dict, original: str, restart_label=None) -> dict:
         client.shell()
         if args.config.read_text() != original:
             raise ValueError("Configuration changed concurrently")
-        if peek_keychain(env) != old:
+        if credential.read() != old:
             raise ValueError("Credential changed concurrently")
-        set_secret(env, issued["token"])
+        credential.write(issued["token"])
         stored = True
         if restart_label:
             _restart(restart_label)
     except Exception:
         if stored:
-            set_secret(env, old)
+            credential.write(old)
         issuer(args, "revoke", issued["sessionId"])
         raise
     # The old session expires naturally; keeping it briefly permits rollback.
@@ -173,7 +222,7 @@ def renew(args):
         raise ValueError("No T3 connection with this ID")
     if not args.restart_label:
         raise ValueError("Renewal requires --restart-label so the running runtime adopts the new credential")
-    _renewable(server)
+    _Credential(server)
     _check_label(args.restart_label)
     # An explicit --issuer-ssh (existing launchd jobs) wins over the recorded one.
     args = argparse.Namespace(**{**vars(args), "issuer_ssh": getattr(args, "issuer_ssh", None) or server.get("issuer_ssh")})
@@ -202,10 +251,7 @@ def renew_all(args) -> bool:
         sid = server.get("id")
         one = argparse.Namespace(**{**vars(args), "id": sid, "issuer_ssh": server.get("issuer_ssh")})
         try:
-            if not server.get("token_env"):
-                result = dict(server_id=sid, renewed=False, skipped="token_file credentials are renewed by hand")
-            else:
-                result = _renew_one(one, server, original)
+            result = _renew_one(one, server, original)
         except Exception as exc:
             ok = False
             result = dict(server_id=sid, renewed=False, error=_safe_error(exc))
