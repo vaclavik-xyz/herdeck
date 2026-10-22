@@ -793,7 +793,7 @@ Use an already authorized SSH account on the T3 host (noninteractive SSH must
 work: `ssh -o BatchMode=yes user@host true`). One command connects it:
 
 ```sh
-python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh admin@100.115.61.124 --install-forward
+python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh admin@100.115.61.124 --install-forward --token-file
 ```
 
 - `--install-forward` writes and loads the LaunchAgent
@@ -814,6 +814,12 @@ python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh admin@100.115.61.124 --in
   `issuer_ssh = "user@host"` on the `[[servers]]` entry. Any failure restores the
   config, clears the Keychain entry, revokes the session on the T3 host and
   unloads/removes the forward agent it created.
+- `--token-file [PATH]` (local or remote connect) stores the token in an
+  owner-only file instead of Keychain (default `<config dir>/<id>-token`,
+  mode 0600) and records `token_file` instead of `token_env`. Use it when setup
+  runs over SSH (Keychain writes fail there with `PasswordSetError`) or for an
+  unsigned/ad-hoc runtime build (see the renewal note below). Setup refuses an
+  existing file; a failed connect removes the file it wrote.
 
 Renewal of every T3 server, remote ones through their recorded `issuer_ssh`,
 local ones through the local T3 CLI, restarting the runtime once if anything

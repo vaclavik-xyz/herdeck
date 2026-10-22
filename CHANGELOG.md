@@ -34,6 +34,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failures, restarts the runtime once, prints a JSON line per server and
   exits 1 on any failure. `--install-renew-agent` installs one hourly
   `com.herdeck.t3-renew` LaunchAgent running it. `--renew --id` keeps working.
+- `t3_setup --token-file [PATH]` stores the new T3 token in an owner-only file
+  (default `<config dir>/<id>-token`) instead of Keychain, so setup works over
+  SSH and unsigned runtime builds read the token without a Keychain prompt.
 
 ### Changed
 - T3: a thread created without a project (T3's scratch "No project" bucket)

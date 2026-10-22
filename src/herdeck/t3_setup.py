@@ -1,4 +1,4 @@
-"""CLI connection setup: T3 auth -> keychain -> backed-up config.
+"""CLI connection setup: T3 auth -> keychain (or a token file) -> backed-up config.
 
 Connects a T3 server on this Mac (local T3 CLI) or, with ``--issuer-ssh``, on
 another host reached through an SSH local forward (token issued over SSH).
@@ -22,7 +22,7 @@ from pathlib import Path
 import tomli_w
 
 from . import t3_remote
-from .secrets import clear_secret, get_secret, peek_keychain, set_secret
+from .secrets import clear_secret, get_secret, peek_keychain, set_secret, write_token_file
 from .settings import SettingsSnapshot, _merged_sections, resolve_profile
 from .t3_actions import Incompatible, negotiate
 from .t3_client import T3Client, T3Http, local_runtime_origin
@@ -33,12 +33,13 @@ def discover(base_dir: Path) -> str:
     return local_runtime_origin(base_dir)
 
 
-def updated_config(data: dict, sid: str, url: str, token_env: str, profile="default", extra=None) -> dict:
+def updated_config(data: dict, sid: str, url: str, token_env: str | None, profile="default", extra=None) -> dict:
     result = copy.deepcopy(data)
     servers = result.setdefault("servers", [])
     if any(s["id"] == sid for s in servers):
         raise ValueError("Server ID already exists; choose a new ID")
-    servers.append({"id": sid, "url": url, "token_env": token_env, "backend": "t3", **(extra or {})})
+    credential = {"token_env": token_env} if token_env else {}
+    servers.append({"id": sid, "url": url, **credential, "backend": "t3", **(extra or {})})
     # Override only the active profile, leaving other explicit selections intact.
     merged, selection = _merged_sections(data, profile)
     selection = selection if selection is not None else (merged.get("deck") or {}).get("overview_order")
@@ -83,9 +84,21 @@ class _Plan:
             raise ValueError("Demo mode is selected; choose live mode before connecting T3")
         if any(s.get("id") == args.id for s in self.data.get("servers", [])):
             raise ValueError("Server ID already exists; choose a new ID")
-        self.env = token_env_for(args.id)
-        if get_secret(self.env) or peek_keychain(self.env) is not None:
-            raise ValueError("Credential name already exists; choose a new server ID")
+        token_file = getattr(args, "token_file", None)
+        if token_file is not None:
+            # A token file needs no Keychain: setup works over SSH and an
+            # ad-hoc signed runtime reads it without an access prompt.
+            self.env = None
+            # Absolute: the runtime and the renew agent run with another cwd.
+            self.token_file = (Path(os.path.expanduser(token_file)) if token_file
+                               else path.with_name(args.id + "-token")).absolute()
+            if self.token_file.exists():
+                raise ValueError(f"Token file {self.token_file} already exists; choose another path or ID")
+        else:
+            self.token_file = None
+            self.env = token_env_for(args.id)
+            if get_secret(self.env) or peek_keychain(self.env) is not None:
+                raise ValueError("Credential name already exists; choose a new server ID")
         self.profile = (os.environ.get("HERDECK_PROFILE") or self.local.get("active_profile")
                         or self.data.get("active_profile") or "default")
 
@@ -94,12 +107,14 @@ def _commit(plan: _Plan, url: str, issue, revoke, extra=None) -> dict:
     """The connect transaction shared by local and remote setup.
 
     Backs up the config files, ``issue()``s a scoped session (returns the T3
-    session JSON), verifies it against ``url``, stores it in Keychain and writes
-    the config. Any failure after issuing restores the config files, clears the
+    session JSON), verifies it against ``url``, stores it in Keychain (or the
+    plan's token file) and writes the config. Any failure after issuing restores the config files, clears the
     stored credential and ``revoke(session_id)``s the session (best effort)."""
     args, path, local_path, local = plan.args, plan.path, plan.local_path, plan.local
     originals, env = plan.originals, plan.env
     T3Http(url, "")
+    if plan.token_file is not None:
+        extra = {**(extra or {}), "token_file": str(plan.token_file)}
     proposed = updated_config(plan.data, args.id, url, env, plan.profile, extra)
     if plan.choice == "local" and "herdr_sessions" not in local.get("local", {}):
         from .deckapp.sessions import discover_local_sessions
@@ -123,8 +138,12 @@ def _commit(plan: _Plan, url: str, issue, revoke, extra=None) -> dict:
         except Incompatible as exc:
             raise ValueError(str(exc)) from None
         snapshot = client.shell()
-        set_secret(env, issued["token"])
-        stored = True
+        if plan.token_file is not None:
+            stored = True  # Set before writing: a partial write is cleaned up too.
+            write_token_file(plan.token_file, issued["token"])
+        else:
+            set_secret(env, issued["token"])
+            stored = True
         resolved = resolve_profile(SettingsSnapshot(path, local_path, proposed, local, os.environ.get("HERDECK_PROFILE")))
         if args.id not in [s.id for s in resolved.config.servers]:
             raise ValueError("Active profile excludes T3")
@@ -143,15 +162,21 @@ def _commit(plan: _Plan, url: str, issue, revoke, extra=None) -> dict:
                 else:
                     atomic_write(p, originals[p])
         if stored:
-            clear_secret(env)
+            if plan.token_file is not None:
+                plan.token_file.unlink(missing_ok=True)
+            else:
+                clear_secret(env)
         try:
             revoke(issued["sessionId"])
         except Exception:
             pass  # Best effort (the session still expires); never mask the cause.
         raise
-    return {"server_id": args.id, "url": url, "threads": len(snapshot["threads"]),
-            "profile": resolved.config.meta.active_profile, "backups": backups,
-            "session_id": issued["sessionId"], "expires_at": issued["expiresAt"]}
+    result = {"server_id": args.id, "url": url, "threads": len(snapshot["threads"]),
+              "profile": resolved.config.meta.active_profile, "backups": backups,
+              "session_id": issued["sessionId"], "expires_at": issued["expiresAt"]}
+    if plan.token_file is not None:
+        result["token_file"] = str(plan.token_file)
+    return result
 
 
 def _checked_session(issued) -> dict:
@@ -270,6 +295,9 @@ def main():
     p.add_argument("--remote-port", type=int, help="T3 port on the remote host (default: read from its server-runtime.json)")
     p.add_argument("--install-forward", action="store_true",
                    help=f"macOS: install the LaunchAgent {t3_remote.FORWARD_PREFIX}<id> running the SSH forward")
+    p.add_argument("--token-file", nargs="?", const="", default=None, metavar="PATH",
+                   help="Store the token in an owner-only file instead of Keychain "
+                        "(default path: <config dir>/<id>-token); works over SSH and with unsigned builds")
     p.add_argument("--restart-label", help="Restart this GUI launchd runtime after successful renewal")
     p.add_argument("--install-renew-agent", action="store_true",
                    help=f"macOS: install {t3_remote.RENEW_LABEL} running --renew-all hourly (needs --restart-label)")
