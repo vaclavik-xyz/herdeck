@@ -324,9 +324,15 @@ def disconnect(args):
         raise ValueError("Configuration changed concurrently; retry")
     atomic_write(path, tomli_w.dumps(data))
     # Only the per-server label this tool installs; a hand-made forward is left alone.
-    forward_removed = re.fullmatch(r"[a-zA-Z0-9_-]+", args.id) is not None and t3_remote.remove_forward(args.id)
-    print(json.dumps({"disconnected": args.id, "backup": str(backup), "credential_retained": True,
-                      "forward_agent_removed": forward_removed}))
+    result = {"disconnected": args.id, "backup": str(backup), "credential_retained": True}
+    try:
+        result["forward_agent_removed"] = (re.fullmatch(r"[a-zA-Z0-9_-]+", args.id) is not None
+                                           and t3_remote.remove_forward(args.id))
+    except Exception as exc:
+        # The config change is committed; report the leftover agent instead of failing.
+        result["forward_agent_removed"] = False
+        result["warning"] = f"could not remove {t3_remote.forward_label(args.id)} ({type(exc).__name__})"
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

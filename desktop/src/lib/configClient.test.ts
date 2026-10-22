@@ -313,6 +313,7 @@ describe("server mutations", () => {
     const edited = updateServer(p, 0, "url", "http://127.0.0.1:13774");
     expect(serversOf(edited)[0].issuer_ssh).toBe("admin@m4");
     expect((edited.base.servers as Record<string, unknown>[])[0].issuer_ssh).toBe("admin@m4");
+    expect(serversOf(updateServer(edited, 0, "issuer_ssh", " admin@m5 "))[0].issuer_ssh).toBe("admin@m5");
     const cleared = updateServer(edited, 0, "issuer_ssh", " ");
     expect(cleared.base.servers).toEqual([{ id: "t3", url: "http://127.0.0.1:13774", token_env: "T3", backend: "t3" }]);
   });

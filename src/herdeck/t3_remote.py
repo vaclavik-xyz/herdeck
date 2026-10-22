@@ -27,8 +27,10 @@ SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
                "-o", "ConnectTimeout=8")
 
-_USER = r"[A-Za-z_][A-Za-z0-9_.-]{0,63}"
-_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+# Never a leading "-" (ssh option). "_" in labels and a digit-first user stay
+# accepted: the issuer's earlier pattern allowed them (ssh_config aliases).
+_USER = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}"
+_LABEL = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
 _HOST = rf"{_LABEL}(?:\.{_LABEL})*"
 
 

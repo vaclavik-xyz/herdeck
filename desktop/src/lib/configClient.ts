@@ -298,7 +298,8 @@ function normalizeServer(record: ServerRecord): ServerRecord {
   const { label, issuer_ssh, ...plain } = record;
   let s: ServerRecord = (label ?? "").trim() ? { ...plain, label } : plain;
   // A blank issuer_ssh is dropped too: the backend only accepts user@host.
-  s = (issuer_ssh ?? "").trim() ? { ...s, issuer_ssh } : s;
+  const issuer = (issuer_ssh ?? "").trim();
+  s = issuer ? { ...s, issuer_ssh: issuer } : s;
   const { token_file, ...rest } = s;
   const file = (token_file ?? "").trim() ? token_file : undefined;
   if (file === undefined) return rest;

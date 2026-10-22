@@ -15,7 +15,8 @@ SHELL = {"threads": [], "archivedThreads": [], "projects": []}
 TARGET = "admin@100.115.61.124"
 
 
-@pytest.mark.parametrize("ok", ["admin@100.115.61.124", "m4mini", "filip.v@m4-mini.tail1234.ts.net", "_svc@host"])
+@pytest.mark.parametrize("ok", ["admin@100.115.61.124", "m4mini", "filip.v@m4-mini.tail1234.ts.net", "_svc@host",
+                                "m4_mini", "1user@host_alias"])
 def test_ssh_target_accepts_user_at_host(ok):
     assert t3_remote.validate_ssh_target(ok) == ok
 
@@ -23,7 +24,7 @@ def test_ssh_target_accepts_user_at_host(ok):
 @pytest.mark.parametrize("bad", [
     "-oProxyCommand=touch /tmp/x", "admin@-oProxyCommand=x", "admin@host;id", "admin@host id",
     "$(id)@host", "admin@host\n", "a@b@c", "admin@host:22", "admin@", "@host", "", "admin@::1",
-    "admin@host.", "admin@.host", "-admin@host", "admin@`id`", None, 7,
+    "admin@host.", "admin@.host", "-admin@host", "admin@`id`", "admin@-host", "admin@x-", None, 7,
 ])
 def test_ssh_target_rejects_options_and_shell_text(bad):
     with pytest.raises(ValueError, match="Invalid SSH target"):
@@ -240,6 +241,16 @@ def test_disconnect_removes_the_forward_it_installed(env, capsys):
     assert [s["id"] for s in tomllib.loads(env.path.read_text())["servers"]] == ["t3-local"]
     t3_setup.disconnect(argparse.Namespace(config=env.path, id="t3-local"))
     assert json.loads(capsys.readouterr().out)["forward_agent_removed"] is False
+
+
+def test_disconnect_reports_a_forward_it_could_not_remove(env, monkeypatch, capsys):
+    t3_setup.connect(_args(env, remote_port=3773))
+    capsys.readouterr()
+    monkeypatch.setattr(t3_remote, "remove_forward", lambda sid: (_ for _ in ()).throw(OSError("launchd")))
+    t3_setup.disconnect(argparse.Namespace(config=env.path, id="t3-m4mini"))
+    out = json.loads(capsys.readouterr().out)
+    assert out["forward_agent_removed"] is False and "com.herdeck.t3-forward.t3-m4mini" in out["warning"]
+    assert [s["id"] for s in tomllib.loads(env.path.read_text())["servers"]] == ["t3-local"]
 
 
 # --- renew-all ---------------------------------------------------------------
