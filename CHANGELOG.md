@@ -12,6 +12,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is not connected (with the `herdeck.t3_setup` command to connect it), and
   warns when two configured servers reach the same T3 environment (duplicate
   tiles). Warnings are marked `!` and do not fail doctor.
+- `[[servers]].label`: an optional short name (max 16 characters) shown as
+  the server's tile tag (`"server"` in `[view].tile_fields`) instead of
+  `T3` / `HERDR`, and used in the deck's offline note, the launcher's
+  "on ..." line and the desktop connection list. Editable in Settings →
+  Servers (en/cs help).
+- With more than one T3 server configured, an unlabelled T3 server's tile tag
+  is the `label` from its T3 descriptor (e.g. `Jupiter-M4mini`, sanitized and
+  bounded), so two T3 servers are no longer both just `T3`. Single-server
+  setups keep their tags.
 
 ### Fixed
 - `python -m herdeck.t3_setup` discovers the local T3 server from the

@@ -294,6 +294,32 @@ Tailscale network; Tailscale SSH is not part of the data path. Local and remote
 agents are keyed by server/session id, so commands always return to the bridge
 that supplied the pane.
 
+### Telling servers apart on the tiles
+
+With `"server"` in `[view].tile_fields`, every agent tile carries a small tag
+in its bottom band and a per-server accent colour (`[theme.server_accents]`).
+The tag is resolved per server:
+
+1. the server's configured `label` (`[[servers]]`, at most 16 characters,
+   editable in **Settings → Servers**), e.g. `label = "M4"`;
+2. for a T3 server, the `label` its descriptor reports
+   (`/.well-known/t3/environment`, e.g. `Jupiter-M4mini`), but only when more
+   than one T3 server is configured — with one, `T3` already identifies it;
+3. otherwise `T3` or `HERDR`, as before.
+
+A tag wider than the tile is ellipsized. A configured `label` also names the
+server in the deck's offline note ("M4 offline"), the launcher's "on M4" line
+and the desktop connection list.
+
+```toml
+[[servers]]
+id = "t3-m4mini"
+backend = "t3"
+url = "http://100.x.y.z:3773"
+token_env = "T3_M4MINI_TOKEN"
+label = "M4"
+```
+
 For agent-managed setup without the connection UI, use the
 **[agent setup runbook](docs/agent-setup.md)**. It covers topology discovery,
 safe token transfer, local/remote/mixed configuration, multiple bridge

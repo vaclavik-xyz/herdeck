@@ -200,6 +200,21 @@ ICO and SVG up to 256 KiB are used (the bridge's limits); anything else (a
 `.icns`, a larger file, a lucide `projectIcon`) keeps the monogram. A failed
 re-fetch keeps the icon already shown.
 
+## Server label
+
+The descriptor also carries the server's display name (`"label":
+"Jupiter-M4mini"`, next to `environmentId` and `serverVersion`). The connector
+keeps it after each successful negotiation and reports it to the runtime once
+per change (`on_server_label`). It is untrusted network text: only a string is
+used, control and format characters are dropped, whitespace collapses, and it
+is cut to 32 characters (the tile ellipsizes it further to fit).
+
+The deck uses it as the tile's server tag (`"server"` in `[view].tile_fields`)
+only when more than one T3 server is configured and that server has no
+configured `[[servers]].label`; a single T3 server keeps the `T3` tag. The
+deck's offline note and launcher line name a server by its configured label or
+its id, never by the descriptor label.
+
 ## Known limits
 
 - A never-opened completed thread is not Done (same as T3).
