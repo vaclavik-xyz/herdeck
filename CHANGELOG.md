@@ -6,10 +6,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-22
+
 ### Added
 - T3 tiles show their project's favicon with `[view].tile_icon = "project"` or
   `"both"`: the icon picked in T3, else the one T3 discovers in the project
   folder, fetched over T3's asset API with the existing read scope.
+- T3: subagents are listed on their parent's tile (running / done / failed)
+  and subagent child threads no longer get tiles of their own, matching T3's
+  sidebar. A child holding its own pending request stays a tile until it is
+  answered.
+- T3: a PLAN READY thread can be replied to from the deck; the reply keeps
+  plan mode.
+- T3 tile previews and notices follow `[view].language` (en/cs).
 
 ### Changed
 - The T3 backend now requires T3 0.0.46+ (orchestration protocol 2; currently
@@ -31,6 +40,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The T3 desktop read-state bridge and the `desktop_read_state` editor toggle.
   The config key and `HERDECK_T3_DESKTOP_READ_STATE` are still accepted,
   ignored, and logged once as obsolete.
+
+### Fixed
+- Agent card: rejected and uncertain T3 results show as failures, and a T3
+  option sends its own payload when several options share an action id.
+- `/health` reports an incompatible T3 server instead of a generic error; a
+  refused retry handshake marks the command as uncertain.
+- T3 token renewal works with the standalone `runtime/versions/<v>/t3` CLI and
+  prerelease/nightly runtime versions (e.g. `0.1.2-nightly.20261022.3512`).
 
 ## [0.15.0] - 2026-10-01
 
