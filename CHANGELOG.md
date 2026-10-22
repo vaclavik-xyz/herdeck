@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-23
+
 ### Added
 - `herdeck-doctor` lists which T3 environment (label, `environmentId`) each
   configured T3 server reaches, warns when a T3 server running on this machine
