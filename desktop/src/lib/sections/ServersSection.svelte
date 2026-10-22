@@ -59,7 +59,7 @@
   });
   const lm = $derived(LM[locale.lang]);
 
-  function set(i: number, field: "id" | "url" | "token_env" | "token_file", v: string): void {
+  function set(i: number, field: "id" | "label" | "url" | "token_env" | "token_file", v: string): void {
     payload = updateServer(payload, i, field, v);
     onChange();
   }
@@ -128,9 +128,10 @@
      A stable-id apparatus would add complexity that 9 řez-4 sections would clone. -->
 {#each servers as s, i (i)}
   <fieldset>
-    <legend>{s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
+    <legend>{s.label ? `${s.label} · ${s.id}` : s.id || lm.new_server} <ConfirmRemoveButton title={lm.remove_server} identity={`${s.id}\u0000${s.url}\u0000${s.token_env}`} resetKey={removalRevision} onconfirm={() => remove(i)} /></legend>
     {#if s.backend === "t3"}<p>T3 Code</p>{/if}
     <TextField label="id" help={HELP.id} owner={s.id} value={s.id} oninput={(v) => set(i, "id", v)} />
+    <TextField label="label" help={HELP.label} owner={s.id} value={s.label ?? ""} oninput={(v) => set(i, "label", v)} />
     <TextField label="url" help={HELP.url} owner={s.id} value={s.url} oninput={(v) => set(i, "url", v)} />
     <TokenSecretField
       label="token_env"

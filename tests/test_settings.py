@@ -947,3 +947,23 @@ def test_notifications_payload_done_rules_parsed():
     n = _notifications_config({"done_min_work": 3, "done_short_delay": 10})
     assert (n.done_min_work, n.done_short_delay) == (3, 10)
     assert _notifications_config({}).done_min_work == 0
+
+
+def test_server_label_is_optional_stripped_and_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "m4"\nurl = "ws://127.0.0.1:8788"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base)
+    assert resolve_profile(load_settings(config)).config.servers[0].label is None
+    config = write(tmp_path / "config.toml", base + 'label = "  M4  "\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].label == "M4"
+    config = write(tmp_path / "config.toml", base + 'label = "   "\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].label is None
+    config = write(tmp_path / "config.toml", base + "label = 4\n")
+    with pytest.raises(ConfigError, match="label must be a string"):
+        resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + 'label = "' + "x" * 17 + '"\n')
+    with pytest.raises(ConfigError, match="longer than 16"):
+        resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + 'label = "M\\u001b4"\n')
+    with pytest.raises(ConfigError, match="control characters"):
+        resolve_profile(load_settings(config))

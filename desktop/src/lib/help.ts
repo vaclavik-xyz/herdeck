@@ -11,6 +11,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
   en: {
     servers: {
       id: "Unique server name the deck uses to sort, color, and route its agents.",
+      label: "Optional short name (max 16 chars, e.g. M4) shown as the tile's server tag instead of T3/HERDR; empty = backend name.",
       url: "WebSocket address of the herdr bridge on the server (e.g. ws://100.x.y.z:8788), ideally a Tailscale IP.",
       token: "Name of the env var or keychain item holding the access token; the value can be saved straight to the keychain.",
       token_file: "Path to a 0600 file holding the token (~ expands); read after the env var, before the keychain. For launchd services.",
@@ -146,6 +147,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
   cs: {
     servers: {
       id: "Jedinečný název serveru, podle kterého deck řadí, barví a směruje jeho agenty.",
+      label: "Volitelný krátký název (max 16 znaků, např. M4) na dlaždici místo T3/HERDR; prázdné = název backendu.",
       url: "WebSocket adresa herdr mostu na serveru (např. ws://100.x.y.z:8788), ideálně Tailscale IP.",
       token: "Název proměnné či položky klíčenky s přístupovým tokenem; hodnotu lze uložit rovnou do klíčenky.",
       token_file: "Cesta k souboru s tokenem s právy 0600 (~ se rozbalí); čte se po env proměnné a před klíčenkou. Pro launchd služby.",

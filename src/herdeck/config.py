@@ -21,6 +21,9 @@ class ServerConfig:
     # keeps read state on the server. Still parsed so older configs load; the
     # T3 connector logs a one-time warning when it is set.
     desktop_read_state: bool = False
+    # Optional short display name (e.g. "M4"): the tile's server tag when
+    # [view].tile_fields has "server", instead of the backend name.
+    label: str | None = None
 
 
 @dataclass

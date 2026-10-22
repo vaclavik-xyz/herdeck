@@ -729,7 +729,10 @@ thread title on the secondary line. They refresh with each T3 snapshot, includin
 renames. If a project title is absent, only the workspace directory basename is
 used. The existing `repo` and `tab` tile-line tokens represent project and thread
 for T3; explicit secondary layouts still take precedence. Mixed-connection badges
-show `T3` or `HERDR`; connection-specific accent colors remain unchanged.
+show `T3` or `HERDR`; connection-specific accent colors remain unchanged. A
+`[[servers]].label` (max 16 characters) replaces the badge for that server, and
+with several T3 servers each unlabelled one shows the `label` from its T3
+descriptor instead (see the README, "Telling servers apart on the tiles").
 
 On macBench's D200, the user confirmed recovery from a stale `Offline /
 Reconnecting` page after switching from the optimized ZIP writer to strmdck's
