@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import tomllib
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -364,13 +365,36 @@ def _server_label(raw: dict) -> str | None:
     if not isinstance(value, str):
         raise ConfigError(f"server '{raw.get('id')}': label must be a string")
     label = value.strip()
-    if any(ch < " " or ch == "\x7f" for ch in label):
-        raise ConfigError(f"server '{raw.get('id')}': label must not contain control characters")
+    # Cc covers C0/C1 controls and DEL; Cf covers bidi overrides (U+202E) and
+    # other invisible format characters that would garble or disguise the tag.
+    # Same policy as t3.descriptor_label, but a user's config is rejected
+    # rather than silently stripped.
+    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in label):
+        raise ConfigError(
+            f"server '{raw.get('id')}': label must not contain control or format characters"
+        )
     if len(label) > SERVER_LABEL_MAX:
         raise ConfigError(
             f"server '{raw.get('id')}': label is longer than {SERVER_LABEL_MAX} characters"
         )
     return label or None
+
+
+def _check_unique_labels(raw_servers: list) -> None:
+    """Two ``[[servers]]`` entries must not share a label (case-insensitive,
+    after trimming): the label is how the deck tells servers apart."""
+    owners: dict[str, str] = {}
+    for raw in raw_servers:
+        value = raw.get("label") if isinstance(raw, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            continue
+        key = value.strip().casefold()
+        if key in owners:
+            raise ConfigError(
+                f"servers '{owners[key]}' and '{raw.get('id')}' have the same label "
+                f"'{value.strip()}'"
+            )
+        owners[key] = str(raw.get("id"))
 
 
 def _theme_config(raw: dict | None) -> ThemeConfig:
@@ -728,6 +752,7 @@ def _build_config(
         if sid not in servers_by_id:
             raise ConfigError(f"unknown server '{sid}'")
         servers.append(_server_config(servers_by_id[sid]))
+    _check_unique_labels(data.get("servers", []))
 
     deck = merged.get("deck") or {}
     grid = _parse_grid(deck.get("grid", "5x3"))

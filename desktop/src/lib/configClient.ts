@@ -290,6 +290,28 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
   });
 }
 
+/** Mirror of settings.SERVER_LABEL_MAX: the longest label the backend accepts. */
+export const SERVER_LABEL_MAX = 16;
+
+/** The label as the backend keeps it (trimmed), "" when none. Every display of
+ *  a server's label goes through this so the editor and the connection list agree. */
+export function serverLabel(server: Pick<ServerRecord, "label">): string {
+  return (server.label ?? "").trim();
+}
+
+/** Why server `index`'s label would be rejected on save, mirroring
+ *  settings._server_label / _check_unique_labels: "too_long" past
+ *  SERVER_LABEL_MAX characters (code points, like Python's len), "duplicate"
+ *  when an earlier server already uses it (case-insensitive). null when fine. */
+export function serverLabelIssue(servers: ServerRecord[], index: number): "too_long" | "duplicate" | null {
+  const label = serverLabel(servers[index] ?? {});
+  if (!label) return null;
+  if ([...label].length > SERVER_LABEL_MAX) return "too_long";
+  const key = label.toLowerCase();
+  if (servers.slice(0, index).some((s) => serverLabel(s).toLowerCase() === key)) return "duplicate";
+  return null;
+}
+
 /** The TOML shape of a record: a blank `token_file` or `issuer_ssh` is dropped
  *  (the backend rejects an empty value), and so is a blank `token_env` next to a
  *  token file — a file-only server is valid, an empty env-var name is not. A

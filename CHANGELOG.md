@@ -53,6 +53,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `python -m herdeck.t3_setup` discovers the local T3 server from the
   `origin` that current T3 writes to `server-runtime.json` (it required the
   older `host` key and failed).
+- `[[servers]].label` rejects C1 control and invisible format characters
+  (e.g. the U+202E bidi override), not just C0 controls.
+- Two servers can no longer share a `[[servers]].label` (compared trimmed and
+  case-insensitively); the config fails with an error naming both servers.
+- The config editor flags a server label that is too long or already used
+  right under the field instead of only on save, and its server header shows
+  the trimmed label like the connection list does.
 
 ## [0.16.0] - 2026-10-22
 

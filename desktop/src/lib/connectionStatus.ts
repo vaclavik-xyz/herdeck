@@ -1,4 +1,4 @@
-import { effectiveActiveServerIds, serversOf, type ConfigPayload } from "./configClient";
+import { effectiveActiveServerIds, serverLabel, serversOf, type ConfigPayload } from "./configClient";
 import type { DeckViewModel } from "./deckClient";
 
 export type ConnectionHealth = "connected" | "disconnected" | "unavailable" | "inactive";
@@ -64,7 +64,7 @@ export function connectionInventory(
     return {
       kind: "remote",
       id: server.id,
-      label: (server.label ?? "").trim(),
+      label: serverLabel(server),
       url: server.url,
       active,
       health: !active
