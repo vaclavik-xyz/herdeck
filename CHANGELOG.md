@@ -21,6 +21,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is the `label` from its T3 descriptor (e.g. `Jupiter-M4mini`, sanitized and
   bounded), so two T3 servers are no longer both just `T3`. Single-server
   setups keep their tags.
+- `python -m herdeck.t3_setup --id ID --issuer-ssh user@host [--install-forward]`
+  connects a T3 server on another host in one command: optional per-server
+  SSH forward LaunchAgent `com.herdeck.t3-forward.<id>` (free loopback port
+  from 13773, remote port read from the host's `server-runtime.json`), token
+  issued over SSH, same verify/Keychain/backup/rollback as a local connect;
+  rollback also revokes remotely and removes the forward agent, and
+  `--disconnect` removes it too. The entry records the new optional
+  `[[servers]].issuer_ssh` key (T3 only, validated, editable in Settings).
+- `t3_setup --renew-all [--restart-label L]` renews every T3 server due for
+  renewal (remote via `issuer_ssh`, local via the local CLI), continues past
+  failures, restarts the runtime once, prints a JSON line per server and
+  exits 1 on any failure. `--install-renew-agent` installs one hourly
+  `com.herdeck.t3-renew` LaunchAgent running it. `--renew --id` keeps working.
 
 ### Changed
 - T3: a thread created without a project (T3's scratch "No project" bucket)

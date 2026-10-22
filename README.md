@@ -351,6 +351,15 @@ config error, not skipped. A launchd or systemd runtime has no shell
 environment (and `herdeck-service` refuses `--env` names containing `TOKEN`),
 so give it a `token_file` or a keychain entry.
 
+T3 Code servers (`backend = "t3"`) are connected by `python -m herdeck.t3_setup`
+(also `herdeck-t3-connect`): `--id t3-local` for T3 on this Mac, or
+`--id t3-m4mini --issuer-ssh user@host --install-forward` for T3 on another
+host, which installs an SSH-forward LaunchAgent, issues the token over SSH and
+records `issuer_ssh` on the server entry. `--renew-all --restart-label <label>`
+renews every T3 token due within seven days and restarts the runtime once;
+`--install-renew-agent` runs that hourly. Details:
+[agent setup](docs/agent-setup.md#dedicated-t3-transport-and-renewal-macos).
+
 A config file that exists but cannot be loaded (a token no source has, a
 malformed value) never starts the demo fleet. The deck shows an empty grid and
 a red **Config error** status panel naming the problem, and `/health` and

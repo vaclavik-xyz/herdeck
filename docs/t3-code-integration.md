@@ -270,10 +270,17 @@ of other projects are not rendered (they keep the favicon/monogram path).
 
 - A T3 desktop app or server on the same Mac: setup discovers it from
   `<base-dir>/userdata/server-runtime.json`.
-- A remote headless server through an SSH tunnel (macBench keeps it with the
-  `com.herdeck.t3-forward` LaunchAgent, `ssh -N -L
-  127.0.0.1:13773:127.0.0.1:3773 <user>@<host>`, server URL
-  `http://127.0.0.1:13773`). Renewal then uses `--issuer-ssh`.
+- A remote headless server through an SSH local forward:
+  `python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh user@host --install-forward`
+  installs the LaunchAgent `com.herdeck.t3-forward.<id>` (`ssh -N -L
+  127.0.0.1:<free port from 13773>:127.0.0.1:<remote T3 port> user@host`),
+  issues the token on the T3 host over SSH, and records `issuer_ssh` on the
+  server entry (server URL `http://127.0.0.1:<port>`). Without
+  `--install-forward`, pass `--local-port` of an existing tunnel.
+- Renewal: `--renew-all --restart-label <label>` renews every T3 server due
+  within seven days (remote via `issuer_ssh`, local via the local CLI) and
+  restarts the runtime once; `--install-renew-agent` installs the hourly
+  `com.herdeck.t3-renew` job for it.
 
 `herdeck-doctor` identifies environments by the descriptor's `environmentId`
 (fetched without a credential, 2 s timeout), not by URL, so a tunnel URL and
