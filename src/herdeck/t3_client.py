@@ -118,6 +118,10 @@ def local_runtime_origin(base_dir) -> str:
     origin = state.get("origin")
     if isinstance(origin, str) and origin:
         url = origin.rstrip("/")
+        parts = urlsplit(url)
+        # A wildcard bind is reported as such; it is reachable over loopback.
+        if parts.hostname in ("0.0.0.0", "::"):
+            url = parts._replace(netloc="127.0.0.1" + (f":{parts.port}" if parts.port else "")).geturl()
     else:
         host, port = state.get("host") or "127.0.0.1", state["port"]
         if host in ("0.0.0.0", "::"):

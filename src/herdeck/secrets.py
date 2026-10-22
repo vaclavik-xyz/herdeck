@@ -80,7 +80,11 @@ def peek_keychain(name: str) -> str | None:
 
 def write_token_file(path: Path, token: str) -> None:
     """Atomically write ``token`` to ``path`` with mode 0600 (the runtime
-    refuses a token file others can read). Creates the parent directory."""
+    refuses a token file others can read). Creates the parent directory.
+
+    A symlinked ``path`` keeps its link: the file it points to is replaced,
+    since ``os.replace`` onto the link itself would swap it for a regular file."""
+    path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".")
     try:

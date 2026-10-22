@@ -10,6 +10,7 @@ it can access the same Keychain as the Herdeck runtime.
 """
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
@@ -20,10 +21,13 @@ from pathlib import Path
 
 from .config import ConfigError
 from .secrets import peek_keychain, set_secret, write_token_file
+from .settings import read_token_file
 from .t3_actions import negotiate
 from .t3_client import T3Client, T3Error, T3Http
 from .t3_remote import validate_ssh_target
 from .t3_state import timestamp
+
+log = logging.getLogger(__name__)
 
 SCOPES = ("--scope", "orchestration:read", "--scope", "orchestration:operate")
 # Mirrors upstream EXACT_SERVICE_VERSION (serviceProtocol.ts): exact SemVer only.
@@ -134,9 +138,8 @@ class _Credential:
         unreadable credential is never overwritten."""
         if self.path is None:
             return peek_keychain(self.env)
-        from .settings import _read_token_file
         try:
-            return _read_token_file(self.server_id, self.path)
+            return read_token_file(self.server_id, self.path)
         except ConfigError as exc:
             raise ValueError(str(exc)) from None
 
@@ -191,10 +194,25 @@ def _renew_one(args, server: dict, original: str, restart_label=None) -> dict:
         stored = True
         if restart_label:
             _restart(restart_label)
-    except Exception:
+    except Exception as exc:
+        # Rollback is best effort and must never replace the original error.
+        # A failed step is reported by exception type only: no token values.
         if stored:
-            credential.write(old)
-        issuer(args, "revoke", issued["sessionId"])
+            try:
+                credential.write(old)
+                stored = False
+            except Exception as rollback:
+                note = (f"restoring the previous credential of {args.id} failed "
+                        f"({type(rollback).__name__}); the new token stays stored and valid")
+                exc.add_note(note)
+                log.error("T3 renewal: %s", note)
+        try:
+            if not stored:  # Never revoke the token the runtime still holds.
+                issuer(args, "revoke", issued["sessionId"])
+        except Exception as revoke:
+            note = f"revoking the new session of {args.id} failed ({type(revoke).__name__})"
+            exc.add_note(note)
+            log.error("T3 renewal: %s", note)
         raise
     # The old session expires naturally; keeping it briefly permits rollback.
     return dict(server_id=args.id, renewed=True, expires_at=issued["expiresAt"])

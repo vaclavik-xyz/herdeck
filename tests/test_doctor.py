@@ -815,6 +815,9 @@ def test_t3_descriptor_is_fetched_without_a_bearer(monkeypatch):
     ({"port": 3773, "origin": "http://127.0.0.1:3773"}, "http://127.0.0.1:3773"),
     ({"host": "0.0.0.0", "port": 3773}, "http://127.0.0.1:3773"),
     ({"host": "::1", "port": 9}, "http://[::1]:9"),
+    # A wildcard bind reported as the origin is probed over loopback.
+    ({"port": 3773, "origin": "http://0.0.0.0:3773"}, "http://127.0.0.1:3773"),
+    ({"port": 3773, "origin": "http://[::]:3773/"}, "http://127.0.0.1:3773"),
 ])
 def test_local_runtime_origin(tmp_path, state, expected):
     import json
@@ -824,3 +827,19 @@ def test_local_runtime_origin(tmp_path, state, expected):
     (tmp_path / "userdata").mkdir()
     (tmp_path / "userdata/server-runtime.json").write_text(json.dumps(state))
     assert local_runtime_origin(tmp_path) == expected
+
+
+def test_doctor_probes_a_wildcard_bound_local_t3_over_loopback(tmp_path, monkeypatch):
+    import json
+
+    import herdeck.doctor as doctor_mod
+    from herdeck.t3_client import T3Http
+
+    (tmp_path / ".t3/userdata").mkdir(parents=True)
+    (tmp_path / ".t3/userdata/server-runtime.json").write_text(
+        json.dumps({"port": 3773, "origin": "http://0.0.0.0:3773"}))
+    monkeypatch.undo()  # drop the autouse stub of _local_t3_origin; HOME is faked instead
+    monkeypatch.setattr(doctor_mod.Path, "home", lambda: tmp_path)
+    assert doctor_mod._local_t3_origin() == "http://127.0.0.1:3773"
+    with pytest.raises(ValueError):  # the client itself stays strict
+        T3Http("http://0.0.0.0:3773", "")

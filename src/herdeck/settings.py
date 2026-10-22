@@ -237,7 +237,7 @@ def _token_sources(raw: dict) -> tuple[str | None, Path | None]:
     return env, path
 
 
-def _read_token_file(server_id: str, path: Path) -> str | None:
+def read_token_file(server_id: str, path: Path) -> str | None:
     """The stripped token in ``path``; None when the file does not exist.
 
     Same rules as the bridge's own token file: a regular file readable by its
@@ -288,7 +288,7 @@ def resolve_server_token(raw: dict) -> tuple[str, str]:
     if env and os.environ.get(env):
         return os.environ[env], "env"
     if path is not None:
-        token = _read_token_file(sid, path)
+        token = read_token_file(sid, path)
         if token:
             return token, "file"
     if env:

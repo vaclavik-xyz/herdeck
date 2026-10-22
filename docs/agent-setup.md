@@ -819,7 +819,8 @@ python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh admin@100.115.61.124 --in
   mode 0600) and records `token_file` instead of `token_env`. Use it when setup
   runs over SSH (Keychain writes fail there with `PasswordSetError`) or for an
   unsigned/ad-hoc runtime build (see the renewal note below). Setup refuses an
-  existing file; a failed connect removes the file it wrote.
+  existing file (or symlink); a failed connect removes the file it wrote and
+  any directories it created for it.
 
 Renewal of every T3 server, remote ones through their recorded `issuer_ssh`,
 local ones through the local T3 CLI, restarting the runtime once if anything
@@ -835,13 +836,17 @@ LaunchAgent (StartInterval=3600, RunAtLoad) that runs the first command with
 this Python interpreter, `--config` of the current config and PYTHONPATH of this
 source; reinstall it after deploying a new source. It refuses to overwrite an
 existing `com.herdeck.t3-renew` plist: boot out and delete an older per-server
-job first. `--renew-all` prints one JSON line per server (never tokens) and a
-summary; one failure does not stop the others; it exits 1 if any server or the
-restart failed.
+job first. Run it from a Python checkout (`python -m herdeck.t3_setup`): the
+packaged (frozen) app is no Python interpreter, so the command refuses there.
+`--remove-renew-agent` boots out and deletes that agent again; it only touches
+a plist whose `Label` is `com.herdeck.t3-renew`. `--renew-all` prints one JSON
+line per server (never tokens) and a summary; one failure does not stop the
+others; it exits 1 if any server or the restart failed.
 
 Renewal writes the new token where the runtime reads it: the server's
 `token_file` when that file exists (the runtime prefers it to the Keychain; written
-atomically, mode 0600), else the Keychain entry named `token_env`. An
+atomically, mode 0600; a symlinked `token_file` keeps its link and the file it
+points to is replaced), else the Keychain entry named `token_env`. An
 unattended runtime is better off with a `token_file` next to `token_env`: an
 unsigned or ad-hoc-signed local build is a new app to the Keychain after every
 rebuild, and while the Mac sleeps with the display off ("dark wake") macOS
