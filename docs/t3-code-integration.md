@@ -22,7 +22,8 @@ Herdeck checks the server descriptor first and again after every reconnect.
 ## Contract summary
 
 All reads are plain HTTP polling (every second); the WebSocket is used only to
-dispatch commands. A credential is a bearer token (no DPoP needed).
+dispatch commands and to ask for project favicon URLs. A credential is a bearer
+token (no DPoP needed).
 
 | Step | Endpoint | Notes |
 |---|---|---|
@@ -31,6 +32,7 @@ dispatch commands. A credential is a bearer token (no DPoP needed).
 | Detail | `GET /api/orchestration/threads/:id/bounded` | prompt of a pending request, plan text, last assistant message; the unbounded `/threads/:id` is used only when the bounded plan text is left in a turn item |
 | Ticket | `POST /api/auth/websocket-ticket` | bearer, no body; the ticket lasted 5 minutes on the server we observed |
 | Dispatch | `ws(s)://host/ws?orchestrationProtocol=2&wsTicket=...` | one `orchestration.dispatchCommand` request, wait for the `Exit`, close; `Ping` is answered with `Pong` |
+| Favicon | same WebSocket, `assets.createUrl` with `{resource: {_tag: "project-favicon", cwd: workspaceRoot, path?: faviconPath}}`, then `GET relativeUrl` | needs only `orchestration:read`; the signed `/api/assets/...` URL lasts an hour; 404 = no favicon |
 
 Facts checked on the live server: shell and detail reads without the
 `x-t3-orchestration-protocol: 2` header fail with HTTP 400; the WebSocket
@@ -185,6 +187,18 @@ config reload rebuilds the connector with the new language. Text from T3
 (prompts, plans, approval option labels) is shown as sent; the deck action
 labels (Implement plan, Mark seen, ...), the tile state labels (PLAN READY,
 STALE, ...) and the result messages of `send()` are still English only.
+
+## Project favicons
+
+With `[view].tile_icon = "project"` or `"both"`, a T3 tile shows the favicon T3
+shows for its project: the project's `faviconPath` (the icon picked in T3)
+when set, else what T3 discovers in `workspaceRoot`. After each refresh, outside
+the delivery lock, the connector asks for every project it has not fetched in
+30 minutes (10 minutes after a miss or failure) and hands the bytes to the
+runtime's icon store; the next refresh puts the hash on the tile. Only PNG,
+ICO and SVG up to 256 KiB are used (the bridge's limits); anything else (a
+`.icns`, a larger file, a lucide `projectIcon`) keeps the monogram. A failed
+re-fetch keeps the icon already shown.
 
 ## Known limits
 
