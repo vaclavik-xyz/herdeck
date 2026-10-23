@@ -54,6 +54,8 @@ def run(sh, detail=None, archived=False):
 
 
 REQ = {"id": "r", "kind": "command", "createdAt": "2026-10-14T11:00:00.000Z"}
+CI_CMD = {"taskId": "bijepelce", "description": "Wait for PR 649 checks to finish", "kind": "command"}
+OPEN_PR = {"number": 649, "snapshot": {"state": "open", "checksState": "failing"}}
 W, B, ID, D, U = Status.WORKING, Status.BLOCKED, Status.IDLE, Status.DONE, Status.UNKNOWN
 
 CASES = [
@@ -83,6 +85,29 @@ CASES = [
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "monitor"}]}, {}, Status.WAITING, "", "MONITOR"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "background_task"}]}, {},
      Status.WAITING, "", "BACKGROUND"),
+    # A command polling an open linked PR's checks holds the run as CI; T3
+    # itself reports such a thread as completed.
+    ({"status": "completed", "pendingBackgroundTasks": [CI_CMD], "pullRequests": [OPEN_PR]}, {},
+     Status.WAITING, "", "CI"),
+    ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "subagent"}, CI_CMD],
+      "pullRequests": [OPEN_PR]}, {}, Status.WAITING, "", "CI"),
+    # Either signal alone is not enough: a dev server in a thread with an open
+    # PR, or a checks-watcher whose PR already merged, stays done.
+    ({"status": "completed", "pendingBackgroundTasks": [{**CI_CMD, "description": "Run dev server"}],
+      "pullRequests": [OPEN_PR], "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {},
+     D, "completion", ""),
+    ({"status": "completed",
+      "pendingBackgroundTasks": [{**CI_CMD, "description": "Start dev server to check the PR UI"}],
+      "pullRequests": [OPEN_PR], "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {},
+     D, "completion", ""),
+    ({"status": "completed", "pendingBackgroundTasks": [{**CI_CMD, "description": "gh pr checks 649 --watch"}],
+      "pullRequests": [OPEN_PR]}, {}, Status.WAITING, "", "CI"),
+    ({"status": "completed", "pendingBackgroundTasks": [CI_CMD],
+      "pullRequests": [{"snapshot": {"state": "merged"}}],
+      "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, D, "completion", ""),
+    ({"status": "completed", "pendingBackgroundTasks": [CI_CMD],
+      "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, D, "completion", ""),
+    ({"status": "running", "pendingBackgroundTasks": [CI_CMD], "pullRequests": [OPEN_PR]}, {}, W, "", ""),
     ({"status": "failed", "lastError": "boom"}, {}, U, "error", "ERROR"),
     ({"status": "failed", "lastErrorClass": "usage_limit"}, {}, U, "error", "LIMIT"),
     ({"interactionMode": "plan", "hasActionableProposedPlan": True, "status": "completed"}, {}, B, "plan", "PLAN READY"),

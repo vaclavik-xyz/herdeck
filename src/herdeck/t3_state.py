@@ -6,6 +6,7 @@ expiry is evaluated on every poll, even when the server emitted no event.
 """
 import hashlib
 import json
+import re
 from datetime import datetime
 
 from herdeck.i18n import tr
@@ -22,6 +23,16 @@ SUBAGENT_STATUS = {"pending": "running", "running": "running", "waiting": "runni
                    "idle": "done", "completed": "done",
                    "failed": "failed", "cancelled": "failed", "interrupted": "failed"}
 _SUBAGENT_ID_MAX = 128  # model._SUBAGENT_TEXT_MAX["id"]
+# A background command whose description reads like waiting on a PR's checks
+# ("Wait for PR 649 checks to finish", "gh pr checks --watch"). Needs the
+# waiting verb too: "Start dev server to check the PR UI" must not match.
+_CI_CMD = re.compile(r"\bgh (pr checks|run watch)\b", re.IGNORECASE)
+_CI_WAIT = re.compile(r"\b(wait|watch)", re.IGNORECASE)
+_CI_SUBJECT = re.compile(r"\b(pr|pull request|checks?|ci)\b", re.IGNORECASE)
+
+
+def _ci_wait_text(text):
+    return bool(_CI_CMD.search(text) or (_CI_WAIT.search(text) and _CI_SUBJECT.search(text)))
 
 
 def timestamp(value):
@@ -124,6 +135,22 @@ def thread_subagents(detail):
     return parse_subagents(raw), running, len(raw)
 
 
+def ci_wait(shell, tasks):
+    """True when a finished run left a command polling an open linked PR.
+
+    T3 does not let a command hold a completed run (it may be a dev server),
+    so an agent that backgrounds ``gh pr checks --watch`` reads as done while
+    CI is still running. Both signals are required: the description alone is
+    free agent text, and an open PR alone says nothing about a dev server."""
+    if shell.get("status") not in ("completed", "waiting"):
+        return False
+    if not any(t.get("kind") == "command" and _ci_wait_text(t.get("description") or "")
+               for t in tasks):
+        return False
+    return any(((pr.get("snapshot") or {}).get("state") == "open")
+               for pr in shell.get("pullRequests") or [] if isinstance(pr, dict))
+
+
 def classify(shell, now, life):
     """Return (status, attention, label, activity); first match wins."""
     req = shell.get("pendingRuntimeRequest")
@@ -140,6 +167,8 @@ def classify(shell, now, life):
     if st == "running":
         return Status.WORKING, "", "", st
     tasks = shell.get("pendingBackgroundTasks") or []
+    if ci_wait(shell, tasks):
+        return Status.WAITING, "", "CI", "waiting"
     if st == "completed":
         # Mirrors upstream backgroundWorkHoldsCompletion: a command (a dev
         # server left running) does not hold a finished run; subagents,
