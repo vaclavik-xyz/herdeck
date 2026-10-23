@@ -24,8 +24,15 @@ SUBAGENT_STATUS = {"pending": "running", "running": "running", "waiting": "runni
                    "failed": "failed", "cancelled": "failed", "interrupted": "failed"}
 _SUBAGENT_ID_MAX = 128  # model._SUBAGENT_TEXT_MAX["id"]
 # A background command whose description reads like waiting on a PR's checks
-# ("Wait for PR 649 checks to finish", "gh pr checks --watch").
-_CI_WAIT = re.compile(r"\b(pr|pull request|checks?|ci|workflows?|gh run)\b", re.IGNORECASE)
+# ("Wait for PR 649 checks to finish", "gh pr checks --watch"). Needs the
+# waiting verb too: "Start dev server to check the PR UI" must not match.
+_CI_CMD = re.compile(r"\bgh (pr checks|run watch)\b", re.IGNORECASE)
+_CI_WAIT = re.compile(r"\b(wait|watch)", re.IGNORECASE)
+_CI_SUBJECT = re.compile(r"\b(pr|pull request|checks?|ci)\b", re.IGNORECASE)
+
+
+def _ci_wait_text(text):
+    return bool(_CI_CMD.search(text) or (_CI_WAIT.search(text) and _CI_SUBJECT.search(text)))
 
 
 def timestamp(value):
@@ -137,7 +144,7 @@ def ci_wait(shell, tasks):
     free agent text, and an open PR alone says nothing about a dev server."""
     if shell.get("status") not in ("completed", "waiting"):
         return False
-    if not any(t.get("kind") == "command" and _CI_WAIT.search(t.get("description") or "")
+    if not any(t.get("kind") == "command" and _ci_wait_text(t.get("description") or "")
                for t in tasks):
         return False
     return any(((pr.get("snapshot") or {}).get("state") == "open")
