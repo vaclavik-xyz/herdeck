@@ -22,7 +22,7 @@ def test_tag_workflow_builds_macos_updater_and_publishes_after_all_builds():
     workflow = (ROOT / ".github/workflows/release.yml").read_text()
 
     assert "build-macos:" in workflow
-    assert "runs-on: macos-14" in workflow
+    assert "runs-on: macos-15" in workflow
     assert "tauri-apps/tauri-action@v0" in workflow
     assert "TAURI_SIGNING_PRIVATE_KEY:" in workflow
     assert "APPLE_SIGNING_IDENTITY:" in workflow
