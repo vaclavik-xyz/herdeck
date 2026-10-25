@@ -37,7 +37,7 @@ from .events import EventHub
 from .i18n import tr
 from .layout import prompt_excerpt
 from .model import AgentKey, AgentState, Status
-from .notify import NotifyThrottle, _warn_failure, event_title
+from .notify import NotifyThrottle, _warn_failure, agent_name, event_title
 from .notify_events import RunTracker, SubagentBursts, event_notification_body
 from .presence_hub import PresenceHub
 from .protocol import _pane_to_state
@@ -870,7 +870,7 @@ class BridgeNotifier:
             title = tr(
                 self._tg_settings().language,
                 "notify.title_reminder",
-                agent=state.agent_type or "agent",
+                agent=agent_name(state.agent_type),
                 minutes=int(elapsed // 60),
             )
             log.info("telegram reminder agent=%s:%s minutes=%d",
@@ -890,7 +890,7 @@ class BridgeNotifier:
         title = tr(
             self._tg_settings().language,
             "notify.title_subagents_done",
-            agent=state.agent_type or "agent",
+            agent=agent_name(state.agent_type),
             count=count,
         )
         self._spawn(self._deliver("subagents_done", state, title, ""))

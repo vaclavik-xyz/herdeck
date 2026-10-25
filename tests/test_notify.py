@@ -13,10 +13,10 @@ def test_macos_sink_sound_name_and_switch(monkeypatch):
 
     scripts = []
     monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: scripts.append(cmd[2]))
-    notify_mod._macos_sink("claude · done", "api", "Hero")
+    notify_mod._macos_sink("Claude · done", "api", "Hero")
     notify_mod._macos_sink("t", "b", True)
     notify_mod._macos_sink("t", "b", False)
-    assert scripts[0] == 'display notification "api" with title "claude · done" sound name "Hero"'
+    assert scripts[0] == 'display notification "api" with title "Claude · done" sound name "Hero"'
     assert 'sound name "Glass"' in scripts[1]  # True keeps the historical default
     assert "sound name" not in scripts[2]
 
@@ -28,7 +28,7 @@ def test_macos_sink_attaches_the_sound_to_the_notification_only(monkeypatch):
 
     commands = []
     monkeypatch.setattr(notify_mod.subprocess, "run", lambda cmd, **kw: commands.append(cmd))
-    notify_mod._macos_sink("claude · done", "api", "Hero")
+    notify_mod._macos_sink("Claude · done", "api", "Hero")
     notify_mod._macos_sink("t", "b", "")  # "" = silent
     assert [cmd[0] for cmd in commands] == ["osascript", "osascript"]
     assert 'sound name "Hero"' in commands[0][2]
@@ -46,7 +46,7 @@ def test_notification_feed_generation_ack_and_reset_cursor(caplog, monkeypatch):
     feed = NotificationFeed()
     first = feed.state()["generation"]
 
-    item = feed.push("codex · done", "api", "Hero")
+    item = feed.push("Codex · done", "api", "Hero")
     assert item["id"] == f"{first}:1"
     now_ns += 37_000_000
     assert feed.ack(first, 1) is True
@@ -77,12 +77,12 @@ def test_notification_feed_wait_wakes_immediately_for_new_item():
     thread.start()
     assert ready.wait(0.2)
     started = time.monotonic()
-    feed.push("codex · done", "api", "Hero")
+    feed.push("Codex · done", "api", "Hero")
     thread.join(timeout=0.3)
 
     assert not thread.is_alive()
     assert time.monotonic() - started < 0.3
-    assert result[0]["items"][0]["title"] == "codex · done"
+    assert result[0]["items"][0]["title"] == "Codex · done"
 
 
 def test_notification_feed_long_poll_cursor_repairs_lost_ack():
@@ -388,8 +388,8 @@ def test_throttle_cooldown_and_interaction_window():
 def test_event_title_localized():
     from herdeck.notify import event_title
 
-    assert event_title("claude", "blocked") == "claude · needs input"
-    assert event_title("codex", "done", "cs") == "codex · hotovo"
+    assert event_title("claude", "blocked") == "Claude · needs input"
+    assert event_title("codex", "done", "cs") == "Codex · hotovo"
 
 
 def test_banner_icon_rides_the_feed_but_not_the_fallback():
@@ -403,16 +403,16 @@ def test_banner_icon_rides_the_feed_but_not_the_fallback():
     )
     notifier = Notifier(sink=sink)
 
-    notifier.notify("claude · done", "shop", "Hero", icon="/tmp/notification-icons/v1-p-ab.png")
-    notifier.notify("claude · done", "blog", "Hero")
+    notifier.notify("Claude · done", "shop", "Hero", icon="/tmp/notification-icons/v1-p-ab.png")
+    notifier.notify("Claude · done", "blog", "Hero")
     items = feed.state()["items"]
     assert items[0]["icon"] == "/tmp/notification-icons/v1-p-ab.png"
     assert items[1]["icon"] is None
 
     # osascript cannot attach images: the fallback keeps its 3-arg contract.
     gate["open"] = False
-    notifier.notify("claude · done", "shop", "Hero", icon="/x.png")
-    assert fallback == [("claude · done", "shop", "Hero")]
+    notifier.notify("Claude · done", "shop", "Hero", icon="/x.png")
+    assert fallback == [("Claude · done", "shop", "Hero")]
 
 
 def test_icon_is_only_passed_to_sinks_when_set():
@@ -450,14 +450,14 @@ def test_agent_meta_rides_the_feed_only():
         "bogus": "dropped",
         "reply": None,
     }
-    Notifier(sink=sink).notify("claude · needs input", "shop", "Glass", meta=meta)
+    Notifier(sink=sink).notify("Claude · needs input", "shop", "Glass", meta=meta)
 
     [item] = feed.state()["items"]
     assert item["kind"] == "alert"
     assert item["agent"] == {"server_id": "prod", "pane_id": "p1"}
     assert item["event"] == "blocked" and item["episode"] == "ep1"
     assert "bogus" not in item and "reply" not in item  # unknown / unset keys stay out
-    assert plain == [("claude · needs input", "shop", "Glass")]
+    assert plain == [("Claude · needs input", "shop", "Glass")]
 
 
 def test_meta_is_not_passed_to_a_sink_that_does_not_accept_it():
@@ -466,3 +466,15 @@ def test_meta_is_not_passed_to_a_sink_that_does_not_accept_it():
         "t", "b", True, icon="/i.png", meta={"event": "done"}
     )
     assert got == ["/i.png"]
+
+
+def test_agent_name_maps_raw_ids_to_display_names():
+    from herdeck.notify import agent_name, event_title
+
+    # Herdr reports bare ids, T3 its provider instance id.
+    assert agent_name("claude") == "Claude"
+    assert agent_name("claudeAgent") == "Claude"
+    assert agent_name("codex") == "Codex"
+    assert agent_name("someNewAgent") == "someNewAgent"
+    assert agent_name("") == "agent"
+    assert event_title("claudeAgent", "done") == "Claude · done"

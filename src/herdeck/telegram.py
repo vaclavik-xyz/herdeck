@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from .i18n import tr
 from .model import AgentKey, AgentState, Status
+from .notify import agent_name
 
 log = logging.getLogger("herdeck.telegram")
 
@@ -150,7 +151,7 @@ class TelegramAlertFormatter:
             self._truncate(prompt.strip()) if has_prompt else tr(lang, "tg.prompt_unavailable")
         )
         text = (
-            f"{tr(lang, 'notify.title_blocked', agent=agent.agent_type or 'agent')}\n"
+            f"{tr(lang, 'notify.title_blocked', agent=agent_name(agent.agent_type))}\n"
             f"{metadata_body}\n\n"
             f"{tr(lang, 'tg.waiting_for')}\n{prompt}\n\n"
             f"{tr(lang, 'tg.reply_hint')}"

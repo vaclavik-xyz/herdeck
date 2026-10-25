@@ -261,7 +261,7 @@ async def test_blocked_event_sends_one_message(tmp_path):
     assert len(sent) == 1
     msg = sent[0]
     assert msg["chat_id"] == CHAT
-    assert msg["text"].startswith(tr("en", "notify.title_blocked", agent="claude"))
+    assert msg["text"].startswith(tr("en", "notify.title_blocked", agent="Claude"))
     assert "api" in msg["text"] and "Allow edit?" in msg["text"]
     assert msg["disable_notification"] == "false"
     assert "reply_markup" not in msg
@@ -387,7 +387,7 @@ async def test_done_after_long_run_sent(tmp_path):
     await start(n)
     await finish(n, work_since=9_000_000, done_since=9_000_000 + 6 * 60_000)
     (msg,) = n.t.sent()
-    assert msg["text"].startswith(tr("en", "notify.title_done", agent="claude"))
+    assert msg["text"].startswith(tr("en", "notify.title_done", agent="Claude"))
 
 
 async def test_done_short_run_deferred_then_sent_when_still_done(tmp_path):
@@ -466,7 +466,7 @@ async def test_done_message_in_czech(tmp_path):
     await start(n)
     await finish(n)
     (msg,) = n.t.sent()
-    assert msg["text"].startswith(tr("cs", "notify.title_done", agent="claude"))
+    assert msg["text"].startswith(tr("cs", "notify.title_done", agent="Claude"))
     assert tr("cs", "notify.title_done", agent="x") != tr("en", "notify.title_done", agent="x")
 
 
@@ -484,7 +484,7 @@ async def test_reminders_x1_x2_x3_then_stop(tmp_path):
         await n.flush()
         assert len(n.t.sent()) == 2 + i
         assert n.t.sent()[-1]["text"].startswith(
-            tr("en", "notify.title_reminder", agent="claude", minutes=i + 1)
+            tr("en", "notify.title_reminder", agent="Claude", minutes=i + 1)
         )
     n.timers.advance(3600)
     await n.flush()
@@ -525,7 +525,7 @@ async def test_subagents_done_burst_one_message(tmp_path):
     await n.flush()
     (msg,) = n.t.sent()
     assert msg["text"].startswith(
-        tr("en", "notify.title_subagents_done", agent="claude", count=2)
+        tr("en", "notify.title_subagents_done", agent="Claude", count=2)
     )
 
 

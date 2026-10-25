@@ -114,12 +114,17 @@ def event_notification_body(agent: AgentState, *, multi_server: bool) -> str:
     """One-line notification body for an event alert.
 
     Leads with the Herdr workspace label the user actually sees (editable in
-    Herdr), then the tab and the session title — not the raw server/pane ids.
-    Falls back to the repo/pane label, and to the branch when no tab/title
-    context exists (older bridges). The server id is appended only in
-    multi-server setups.
+    Herdr) or the T3 project title, then the tab and the session title — not
+    the raw server/pane ids or a T3 workspace path. Falls back to the repo/pane
+    label, and to the branch when no tab/title context exists (older bridges).
+    The server id is appended only in multi-server setups, and never for a T3
+    thread: its project and title already identify it.
     """
-    head = (agent.workspace or agent.repo or agent.label).strip()
+    if agent.no_project:
+        # T3's scratch bucket: its path says nothing, the thread title does.
+        head = agent.label.strip()
+    else:
+        head = (agent.workspace or agent.project or agent.repo or agent.label).strip()
     parts = [head]
     for candidate in (agent.tab.strip(), agent.title.strip()):
         if not candidate:
@@ -133,7 +138,7 @@ def event_notification_body(agent: AgentState, *, multi_server: bool) -> str:
             parts.append(candidate)
     if len(parts) == 1 and agent.branch and agent.branch.strip() != head:
         parts.append(agent.branch.strip())
-    if multi_server:
+    if multi_server and agent.backend != "t3":
         parts.append(agent.key.server_id)
     return " · ".join(parts)
 
