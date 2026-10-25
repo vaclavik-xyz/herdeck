@@ -51,11 +51,11 @@ def test_waits_for_the_parent_to_stop_working_then_alerts_once():
     src._on_event(server.id, with_subs(server, "p0", Status.WORKING, sub("a", "done"), sub("b", "done")))
     assert titles(notifier) == []  # parent still working on the results
     src._on_event(server.id, with_subs(server, "p0", Status.IDLE, sub("a", "done"), sub("b", "done")))
-    assert titles(notifier) == ["claude · subagents done (2)"]
+    assert titles(notifier) == ["Claude · subagents done (2)"]
     meta = notifier.metas[-1]
     assert meta == {"agent": {"server_id": server.id, "pane_id": "p0"}, "event": "subagents_done"}
     src._on_snapshot(server.id, [with_subs(server, "p0", Status.IDLE, sub("a", "done"), sub("b", "done"))])
-    assert titles(notifier) == ["claude · subagents done (2)"]  # once per burst
+    assert titles(notifier) == ["Claude · subagents done (2)"]  # once per burst
 
 
 @pytest.mark.parametrize("status", [Status.IDLE, Status.BLOCKED, Status.DONE])
@@ -63,7 +63,7 @@ def test_an_idle_blocked_or_done_parent_alerts_right_away(status):
     src, server, notifier = _source()
     src._on_snapshot(server.id, [with_subs(server, "p0", Status.WORKING, sub("a"))])
     src._on_event(server.id, with_subs(server, "p0", status, sub("a", "failed")))
-    assert titles(notifier) == ["claude · subagents done (1)"]
+    assert titles(notifier) == ["Claude · subagents done (1)"]
 
 
 @pytest.mark.parametrize("status", [Status.WORKING, Status.UNKNOWN])
@@ -80,7 +80,7 @@ def test_a_subagent_started_while_pending_joins_the_same_burst():
     src._on_event(server.id, with_subs(server, "p0", Status.WORKING, sub("a", "done")))
     src._on_event(server.id, with_subs(server, "p0", Status.WORKING, sub("a", "done"), sub("b", started=T0 + 5)))
     src._on_event(server.id, with_subs(server, "p0", Status.IDLE, sub("a", "done"), sub("b", "done", T0 + 5)))
-    assert titles(notifier) == ["claude · subagents done (2)"]
+    assert titles(notifier) == ["Claude · subagents done (2)"]
 
 
 def test_counts_subagents_that_were_never_seen_running():
@@ -91,7 +91,7 @@ def test_counts_subagents_that_were_never_seen_running():
         server.id,
         with_subs(server, "p0", Status.IDLE, sub("old", "done", T0 - 10), sub("a", "done"), sub("b", "done", T0 + 1)),
     )
-    assert titles(notifier) == ["claude · subagents done (2)"]
+    assert titles(notifier) == ["Claude · subagents done (2)"]
 
 
 def test_token_only_bridges_count_the_peak():
@@ -99,7 +99,7 @@ def test_token_only_bridges_count_the_peak():
     src._on_snapshot(server.id, [with_subs(server, "p0", Status.WORKING, token=(1, 1))])
     src._on_event(server.id, with_subs(server, "p0", Status.WORKING, token=(3, 4)))
     src._on_event(server.id, with_subs(server, "p0", Status.IDLE, token=(0, 4)))
-    assert titles(notifier) == ["claude · subagents done (3)"]
+    assert titles(notifier) == ["Claude · subagents done (3)"]
 
 
 def test_a_new_burst_alerts_again_after_the_cooldown():
@@ -127,7 +127,7 @@ def test_title_is_localized():
     src, server, notifier = _source(lang="cs")
     src._on_snapshot(server.id, [with_subs(server, "p0", Status.WORKING, sub("a"), sub("b"), sub("c"))])
     src._on_event(server.id, with_subs(server, "p0", Status.DONE, sub("a", "done"), sub("b", "done"), sub("c", "done")))
-    assert "claude · subagenti hotovi (3)" in [c[0] for c in notifier.calls]
+    assert "Claude · subagenti hotovi (3)" in [c[0] for c in notifier.calls]
 
 
 def test_the_focused_pane_is_skipped_while_you_use_the_mac():
@@ -142,7 +142,7 @@ def test_alerts_even_when_the_bridge_drives_lifecycle_events(monkeypatch):
     monkeypatch.setattr(src, "_bridge_events", lambda server_id: True)
     src._on_snapshot(server.id, [with_subs(server, "p0", Status.WORKING, sub("a"))])
     src._on_event(server.id, with_subs(server, "p0", Status.IDLE, sub("a", "done")))
-    assert titles(notifier) == ["claude · subagents done (1)"]
+    assert titles(notifier) == ["Claude · subagents done (1)"]
 
 
 def test_subagents_done_parses_as_an_opt_in_flag():

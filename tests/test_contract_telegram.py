@@ -135,9 +135,9 @@ def test_blocked_alert_carries_prompt_and_answer_buttons(interactive):
     assert fields["message_thread_id"] == str(THREAD)
     assert fields["disable_notification"] == "true"  # sound = false
     text = fields["text"]
-    assert text.startswith("claude · needs input\n")
+    assert text.startswith("Claude · needs input\n")
     # the agent's labels, never the internal pane id
-    assert text.startswith("claude · needs input\nrepo-p1 · main\n\n")
+    assert text.startswith("Claude · needs input\nrepo-p1 · main\n\n")
     assert f"Waiting for:\n{PROMPT}" in text
     assert text.endswith("Reply to this message to send text to the agent.")
     assert _keyboard(fields) == [
@@ -273,7 +273,7 @@ def test_done_alert_is_one_way(interactive):
     bridge.push_event(pane("p1", "done", label="alpha"))
     fields = telegram.wait_call("sendMessage")
     assert "reply_markup" not in fields
-    assert fields["text"] == "claude · done\nrepo-p1 · main"
+    assert fields["text"] == "Claude · done\nrepo-p1 · main"
     assert fields["chat_id"] == CHAT and fields["message_thread_id"] == str(THREAD)
 
 
@@ -287,7 +287,7 @@ def test_one_way_backend_sends_plain_alerts_and_never_polls(tmp_path):
         assert "message_thread_id" not in fields
         assert "reply_markup" not in fields
         assert fields["disable_notification"] == "false"  # sound = true
-        assert fields["text"] == "claude · needs input\nrepo-p1 · main"
+        assert fields["text"] == "Claude · needs input\nrepo-p1 · main"
         time.sleep(0.5)
         assert telegram.sent("getUpdates") == []
     finally:
@@ -329,7 +329,7 @@ def test_a_focused_pane_still_alerts_on_telegram(interactive):
     time.sleep(0.3)  # the working snapshot is the baseline
     bridge.push_event(pane("p1", "blocked", label="alpha", focused=True))
     fields = telegram.wait_call("sendMessage", lambda f: "reply_markup" in f)
-    assert fields["text"].startswith("claude · needs input\n")
+    assert fields["text"].startswith("Claude · needs input\n")
 
 
 def test_a_focused_pane_still_alerts_one_way(tmp_path):
@@ -338,7 +338,7 @@ def test_a_focused_pane_still_alerts_one_way(tmp_path):
         time.sleep(0.3)
         bridge.push_event(pane("p1", "done", label="alpha", focused=True))
         fields = telegram.wait_call("sendMessage")
-        assert fields["text"] == "claude · done\nrepo-p1 · main"
+        assert fields["text"] == "Claude · done\nrepo-p1 · main"
     finally:
         proc.stop()
         bridge.close()

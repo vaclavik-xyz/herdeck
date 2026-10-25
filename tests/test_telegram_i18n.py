@@ -36,7 +36,7 @@ def callbacks(markup):
 
 def test_english_alert():
     text, markup = fmt("en")
-    assert text.startswith("claude · needs input\napi\n")
+    assert text.startswith("Claude · needs input\napi\n")
     assert "Waiting for:\n" + PROMPT in text
     assert "Reply to this message to send text to the agent." in text
     assert buttons(markup) == ["Approve", "Deny", "Stop", "Read again"]
@@ -44,7 +44,7 @@ def test_english_alert():
 
 def test_czech_alert_has_no_english():
     text, markup = fmt("cs")
-    assert text.startswith("claude · čeká na tebe\napi\n")
+    assert text.startswith("Claude · čeká na tebe\napi\n")
     assert "Ptá se:\n" + PROMPT in text
     assert "Odpovědí na tuto zprávu pošleš text agentovi." in text
     assert buttons(markup) == ["Schválit", "Zamítnout", "Stop", "Načíst znovu"]

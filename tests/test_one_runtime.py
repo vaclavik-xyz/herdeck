@@ -154,7 +154,7 @@ def test_blocked_alerts_go_to_the_interactive_chain_and_done_stays_one_way(monke
     assert interactive == [(AgentKey("local", "p1"), "agent-p1")]
     assert one_way == []
     source._on_event("local", agent(status=Status.DONE))
-    assert one_way == ["claude · done"]
+    assert one_way == ["Claude · done"]
     assert len(interactive) == 1
 
 
@@ -173,7 +173,7 @@ def test_without_an_active_interactive_chain_blocked_alerts_are_one_way(monkeypa
     source.set_telegram_interactive(lambda: False, lambda *a, **k: interactive.append(a))
     source._on_snapshot("local", [agent()])
     source._on_event("local", agent(status=Status.BLOCKED))
-    assert one_way == ["claude · needs input"]
+    assert one_way == ["Claude · needs input"]
     assert interactive == []
 
 

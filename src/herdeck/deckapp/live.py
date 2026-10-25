@@ -47,6 +47,7 @@ from ..notify import (
     Notifier,
     NotifyThrottle,
     _macos_sink,
+    agent_name,
     deckapp_sink,
     event_title,
 )
@@ -922,7 +923,7 @@ class LiveSource(
             title = tr(
                 lang,
                 "notify.title_reminder",
-                agent=state.agent_type or "agent",
+                agent=agent_name(state.agent_type),
                 minutes=int(elapsed // 60),
             )
             body = event_notification_body(state, multi_server=multi)
@@ -1341,7 +1342,7 @@ class LiveSource(
         title = tr(
             self._config.view.language,
             "notify.title_subagents_done",
-            agent=agent.agent_type or "agent",
+            agent=agent_name(agent.agent_type),
             count=count,
         )
         body = event_notification_body(agent, multi_server=len(self._config.overview_order) > 1)

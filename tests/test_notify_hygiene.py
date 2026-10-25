@@ -72,7 +72,7 @@ def test_no_alert_for_the_pane_you_are_looking_at():
     assert notifier.calls == []
     # Another (unfocused) pane still alerts.
     src._on_event(server.id, agent(server.id, "p1", Status.DONE))
-    assert [c[0] for c in notifier.calls] == ["claude · done"]
+    assert [c[0] for c in notifier.calls] == ["Claude · done"]
 
 
 def test_a_focused_pane_alerts_when_you_are_away_from_the_host():
@@ -80,7 +80,7 @@ def test_a_focused_pane_alerts_when_you_are_away_from_the_host():
     src, notifier, _probe = _live(config, server, idle=600.0)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
     src._on_event(server.id, _focused(server, "p0", Status.BLOCKED))
-    assert [c[0] for c in notifier.calls] == ["claude · needs input"]
+    assert [c[0] for c in notifier.calls] == ["Claude · needs input"]
 
 
 def test_unknown_idle_time_counts_as_away():
@@ -90,7 +90,7 @@ def test_unknown_idle_time_counts_as_away():
     src, notifier, _probe = _live(config, server, idle=None)
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
     src._on_event(server.id, _focused(server, "p0", Status.DONE))
-    assert [c[0] for c in notifier.calls] == ["claude · done"]
+    assert [c[0] for c in notifier.calls] == ["Claude · done"]
 
 
 def test_a_focused_pane_still_reaches_remote_backends(monkeypatch):
@@ -130,13 +130,13 @@ def test_a_focused_pane_still_reaches_remote_backends(monkeypatch):
     interactive = []
     src._on_snapshot(server.id, [agent(server.id, "p0", Status.WORKING)])
     src._on_event(server.id, _focused(server, "p0", Status.DONE))
-    assert local == [] and remote == ["claude · done"]
+    assert local == [] and remote == ["Claude · done"]
     src.set_telegram_interactive(lambda: True, lambda a, **k: interactive.append(a.key))
     src._on_event(server.id, _focused(server, "p0", Status.BLOCKED))
     assert local == [] and interactive == [agent(server.id, "p0", Status.BLOCKED).key]
     # an unfocused pane keeps its local banner
     src._on_event(server.id, agent(server.id, "p1", Status.DONE))
-    assert local == ["claude · done"]
+    assert local == ["Claude · done"]
 
 
 def test_skip_focused_can_be_turned_off():
@@ -275,7 +275,7 @@ def test_a_still_blocked_agent_is_reminded_once_per_interval_at_most_three_times
         assert src.check_reminders() == 0
         now[0] += 60
         assert src.check_reminders() == 1
-        assert notifier.calls[-1][0] == "claude · still needs input (10 min)"
+        assert notifier.calls[-1][0] == "Claude · still needs input (10 min)"
         assert notifier.metas[-1]["episode"] == src._block_episode[agent(server.id, "p0", Status.BLOCKED).key]
         assert src.check_reminders() == 0  # once per interval
         for minutes in (20, 30):
@@ -309,7 +309,7 @@ def test_reminder_title_is_localized_and_off_by_default():
     try:
         now[0] += 25 * 60
         src.check_reminders()
-        assert notifier.calls[-1][0] == "claude · pořád čeká na tebe (25 min)"
+        assert notifier.calls[-1][0] == "Claude · pořád čeká na tebe (25 min)"
     finally:
         src.close()
     off, _server, notifier, now = _reminding(remind_after=0)
@@ -369,18 +369,18 @@ def _tg_sink(config, away):
 
 def test_telegram_only_when_away_gates_on_the_away_predicate():
     sink, sent, asked = _tg_sink(_tg_config(10), away=False)
-    sink("claude · needs input", "shop", "Glass")
+    sink("Claude · needs input", "shop", "Glass")
     assert sent == [] and asked == [600.0]
 
     sink, sent, _asked = _tg_sink(_tg_config(10), away=True)
-    sink("claude · needs input", "shop", "Glass")
-    assert sent == ["claude · needs input"]
+    sink("Claude · needs input", "shop", "Glass")
+    assert sent == ["Claude · needs input"]
 
 
 def test_telegram_always_sends_when_the_gate_is_off():
     sink, sent, asked = _tg_sink(_tg_config(0), away=False)
-    sink("claude · done", "shop", "Hero")
-    assert sent == ["claude · done"] and asked == []
+    sink("Claude · done", "shop", "Hero")
+    assert sent == ["Claude · done"] and asked == []
 
 
 def test_away_needs_idle_input_and_no_recent_deck_press():

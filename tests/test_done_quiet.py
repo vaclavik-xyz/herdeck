@@ -98,7 +98,7 @@ def test_long_run_alerts_at_once():
     src, server, notifier, timers = _live()
     src._on_snapshot(server.id, [st("p", Status.WORKING, 0, server.id)])
     src._on_event(server.id, st("p", Status.DONE, 5 * MIN, server.id))
-    assert [c[0] for c in notifier.calls] == ["claude · done"]
+    assert [c[0] for c in notifier.calls] == ["Claude · done"]
     assert timers.pending == []
 
 
@@ -109,7 +109,7 @@ def test_short_run_is_deferred_and_fires_if_still_done():
     assert notifier.calls == []
     assert timers.pending[0]["delay"] == 600.0
     timers.fire_all()
-    assert [c[0] for c in notifier.calls] == ["claude · done"]
+    assert [c[0] for c in notifier.calls] == ["Claude · done"]
 
 
 def test_short_run_answered_in_time_never_alerts():
@@ -143,7 +143,7 @@ def test_unknown_run_alerts_at_once():
     src, server, notifier, timers = _live()
     src._on_snapshot(server.id, [st("p", Status.IDLE, 0, server.id)])
     src._on_event(server.id, st("p", Status.DONE, MIN, server.id))
-    assert [c[0] for c in notifier.calls] == ["claude · done"]
+    assert [c[0] for c in notifier.calls] == ["Claude · done"]
 
 
 def test_overdue_short_done_fires_at_once_when_delay_already_passed():
@@ -157,7 +157,7 @@ def test_rules_off_keeps_todays_behaviour():
     src, server, notifier, timers = _live(min_work=0)
     src._on_snapshot(server.id, [st("p", Status.WORKING, 0, server.id)])
     src._on_event(server.id, st("p", Status.DONE, MIN // 2, server.id))
-    assert [c[0] for c in notifier.calls] == ["claude · done"]
+    assert [c[0] for c in notifier.calls] == ["Claude · done"]
 
 
 # --- bridge lifecycle-event path -------------------------------------------------
