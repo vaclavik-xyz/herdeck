@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from .driver.base import PanelGauge, PanelStat, PanelView, TileView
+from .driver.base import PanelGauge, PanelStat, PanelView, TileView, time_line
 from .i18n import tr
 from .model import AgentState, Status
 from .project_icons import ProjectIconStore, tile_icon_fields
@@ -92,6 +92,7 @@ def agent_tile_view(
         branch=branch,
         status_text=status_text,
         time_text=time_text,
+        wait_reason=tile_wait_reason(state),
         pinned=pinned,
         server_tag=server_tag,
         server_accent=server_accent,
@@ -636,10 +637,7 @@ def tile_wait_reason(agent: AgentState) -> str:
 
 
 def tile_time_text(agent: AgentState, elapsed: str) -> str:
-    """The line under the status word: the waiting reason, then the elapsed
-    time ("CI · 4m"). The status word itself stays WAITING so a waiting agent
-    always reads as waiting, whatever holds it."""
-    return " · ".join(part for part in (tile_wait_reason(agent), elapsed) if part)
+    return time_line(tile_wait_reason(agent), elapsed)
 
 
 def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) -> str:

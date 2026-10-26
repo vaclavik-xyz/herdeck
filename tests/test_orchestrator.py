@@ -710,7 +710,7 @@ def test_agent_tile_waiting_on_beats_the_state_label():
     )
 
     assert _tile_for(o).status_text == "WAITING"
-    assert _tile_for(o).time_text.startswith("CI · ")
+    assert _tile_for(o).wait_reason == "CI"
 
 
 def test_offline_agent_tile_beats_the_state_label():
@@ -752,7 +752,7 @@ def test_waiting_agent_renders_violet_with_holder_label():
     waiting = tiles["api"]
     assert waiting.color == "violet"
     assert waiting.status_text == "WAITING"
-    assert waiting.time_text.startswith("CI · ")  # the holder's label under the word
+    assert waiting.wait_reason == "CI"  # the holder's label, drawn under the word
     assert waiting.spinner is None  # waiting tiles do not animate
     working = [t for t in rs.tiles if t.color == "green"]
     assert working and rs.tiles.index(working[0]) < rs.tiles.index(waiting)  # working sorts first

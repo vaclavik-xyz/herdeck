@@ -999,9 +999,7 @@ class Orchestrator:
                         )
                         if "status" in fields
                         else None,
-                        time_text=layout.tile_time_text(s, self._elapsed_text(s.key))
-                        if "time" in fields
-                        else None,
+                        time_text=self._elapsed_text(s.key) if "time" in fields else None,
                         pinned=s.key in self.pins.values(),
                         server_tag=tag,
                         server_accent=accent,

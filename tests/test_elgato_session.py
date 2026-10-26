@@ -570,7 +570,7 @@ def test_slot_tile_waiting_on_beats_the_state_label():
     sess.apply_snapshot("dev", [held])
 
     assert sess._slot_tile(0).status_text == "WAITING"
-    assert sess._slot_tile(0).time_text == "CI"
+    assert sess._slot_tile(0).wait_reason == "CI"
 
 
 def test_action_tiles_default_to_english():
@@ -585,7 +585,7 @@ def test_waiting_slot_shows_waiting_word_with_holder_label_below():
     held.waiting_on = "⏳ ci"
     sess.apply_snapshot("dev", [held])
     slot = sess._slot_tile(0)
-    assert (slot.status_text, slot.time_text) == ("WAITING", "CI")
+    assert (slot.status_text, slot.wait_reason) == ("WAITING", "CI")
     assert slot.color == "violet"
 
 
