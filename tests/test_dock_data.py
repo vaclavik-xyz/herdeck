@@ -5,10 +5,13 @@ import io
 from PIL import Image
 
 from herdeck.deckapp.dock_data import (
+    NO_PROJECT_ROW_ICON,
+    PROJECT_ICON_PX,
     agent_mark_png,
     agent_rows,
     list_signature,
     monogram,
+    project_icon_png,
     row_title,
 )
 from herdeck.model import AgentKey, AgentState, Status
@@ -134,6 +137,8 @@ def test_rows_name_a_t3_thread_and_its_wait_reason():
     # the scratch dir is not a project: the row shows (and groups under) T3's
     # "No project" title, and its monogram is not the path's "U"
     assert (rows[0]["backend"], rows[0]["repo"], rows[0]["monogram"]) == ("t3", "No project", "N")
+    # ...and it shows the bundled no-project glyph the deck tile shows
+    assert rows[0]["icon"] == NO_PROJECT_ROW_ICON
     assert rows[0]["waiting_on"] == "CI"  # the backend's waiting label
     assert (rows[1]["backend"], rows[1]["waiting_on"]) == ("herdr", "REVIEW")  # holder label first
 
@@ -143,6 +148,25 @@ def test_rows_name_a_t3_thread_by_its_project_not_its_workspace_path():
     unnamed = _agent("t2", repo="/Users/me/projects/shop", backend="t3")
     rows = agent_rows([named, unnamed], since={}, connections={}, overrides={}, store=ProjectIconStore())
     assert [(r["repo"], r["monogram"]) for r in rows] == [("Herdeck", "H"), ("shop", "S")]
+
+
+def test_no_project_glyph_is_served_as_a_project_icon():
+    code, png = project_icon_png(NO_PROJECT_ROW_ICON, ProjectIconStore())
+    assert code == 200
+    img = Image.open(io.BytesIO(png))
+    assert img.size == (PROJECT_ICON_PX, PROJECT_ICON_PX)
+    assert img.getextrema()[3][1] > 0  # drawn, not blank
+
+
+def test_a_project_icon_override_beats_the_no_project_glyph(tmp_path):
+    override = tmp_path / "scratch.png"
+    override.write_bytes(_png())
+    thread = _agent("t1", repo="/Users/me/.t3/scratch", project="No project", no_project=True, backend="t3")
+    rows = agent_rows(
+        [thread], since={}, connections={}, overrides={"/Users/me/.t3/scratch": str(override)},
+        store=ProjectIconStore(),
+    )
+    assert rows[0]["icon"] == icon_hash(override.read_bytes())
 
 
 def test_rows_ignore_a_stale_waiting_label_off_waiting():
@@ -350,8 +374,6 @@ def test_usage_route_is_empty_without_a_hub():
 # --- GET /project-icon/<hash> --------------------------------------------------
 
 import urllib.request  # noqa: E402
-
-from herdeck.deckapp.dock_data import PROJECT_ICON_PX, project_icon_png  # noqa: E402
 
 
 def _ico() -> bytes:

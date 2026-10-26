@@ -30,6 +30,11 @@ PROJECT_ICON_PX = 96
 PROJECT_ICON_CACHE_CONTROL = "max-age=86400"
 # An agent type as it may appear in /agent-mark/<type> (lowercase slug).
 AGENT_TYPE_RE = re.compile(r"[a-z0-9_-]{1,32}")
+# The /project-icon "hash" of the bundled no-project glyph (the tiles'
+# project_icons.NO_PROJECT_ICON, icons.no_project_image): a fixed name in the
+# hash format, so the dock client and the image proxy take it like any
+# favicon. Bump it when the glyph's pixels change (the WebView caches a day).
+NO_PROJECT_ROW_ICON = "0000000000000001"
 
 
 def icon_fallback_of(view) -> str:
@@ -109,7 +114,8 @@ def agent_rows(
                 "waiting_on": waiting_on(agent),
                 "subagents": agent.subagents_running,
                 "offline": not connections.get(agent.key.server_id, True),
-                "icon": target.resolve(name, agent.project_icon, overrides),
+                "icon": target.resolve(name, agent.project_icon, overrides)
+                or (NO_PROJECT_ROW_ICON if agent.no_project else None),
                 "monogram": monogram(row_repo(agent) or name),
             }
         )
@@ -174,6 +180,8 @@ def project_icon_png(icon_hash: str, store: ProjectIconStore | None = None) -> t
     monogram)."""
     if not ICON_HASH_RE.fullmatch(icon_hash):
         return 400, None
+    if icon_hash == NO_PROJECT_ROW_ICON:
+        return 200, _no_project_png()
     stored = (store if store is not None else default_store()).get(icon_hash)
     if stored is None:
         return 404, None
@@ -191,6 +199,18 @@ def project_icon_png(icon_hash: str, store: ProjectIconStore | None = None) -> t
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return 200, buf.getvalue()
+
+
+def _no_project_png() -> bytes:
+    """The bundled no-project glyph as a PROJECT_ICON_PX PNG."""
+    from PIL import Image
+
+    from ..icons import no_project_image
+
+    img = no_project_image().resize((PROJECT_ICON_PX, PROJECT_ICON_PX), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 def agent_mark_png(agent_type: str, icons) -> tuple[int, bytes | None]:

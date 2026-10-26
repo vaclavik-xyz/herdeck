@@ -75,7 +75,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   list is a plain row, not a herdr focus button. `/agent/list` rows carry
   `backend`, a T3 waiting label (CI, SUBAGENT) as `waiting_on`, and a
   thread's T3 project name (not its workspace path; "No project" for a
-  project-less thread) as its repo.
+  project-less thread) as its repo. A project-less thread shows the deck's
+  bundled no-project glyph (served as `/project-icon/0000000000000001`)
+  instead of a monogram.
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)
