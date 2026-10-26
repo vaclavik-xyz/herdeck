@@ -48,12 +48,19 @@ language = "en"
 # unfold them, "hide" folds them back). Handy with 15-20 agents; the Elgato
 # plugin ignores it.
 collapse_idle = false
+# Deck look: "classic" (default, the original look) | "signal" (favicon + task
+# title, status as colour AND shape) | "headline" (big project name on the
+# status colour) | "quiet" (only "needs you" is loud) | the id of a user theme
+# in <config dir>/themes/<id>.py (see docs/themes.md). A theme is code and runs
+# with your user privileges. An unknown or broken theme draws classic.
+deck_theme = "classic"
 # Tile icon: "agent" (default) = the agent's logo, "project" = the project's
 # favicon (found in the repo by the bridge, or served by T3 for T3 tiles; a
 # coloured letter when none),
 # "both" = the agent's logo with a small project badge. In "project" mode the
 # spin working animation renders as a comet ring around the favicon.
 tile_icon = "agent"
+# project_icon_fallback = "monogram"   # no favicon: "monogram" (letter) or "agent" (agent logo)
 # Per-repo icon file on the machine running the deck ("~" expanded); overrides
 # the discovered favicon. PNG/ICO/SVG (<= 256 KiB; SVG rendered with resvg).
 # Quote repo names containing a dot: "vaclavik.xyz" = "~/icons/site.png".
@@ -128,6 +135,15 @@ alert_reset = false
 # HERDECK_BRIDGE_USAGE=1 (herdeck-service install bridge --usage), else this
 # machine's own poll; "local" = always poll here; "bridge" = bridge data only.
 source = "auto"
+
+# Desktop app only (the runtime passes this table through untouched). Every
+# key applies live after Apply in Settings → Window.
+[desktop]
+floating = "dock"             # "dock" = mini dock strip, "deck" = hardware mirror
+# deck_always_on_top = true   # default: on for the dock, off for the deck
+dock_show = "active"          # "active" (all but idle), "all", "needs_you" (blocked + done)
+dock_group = true             # fold 2+ agents of one project (repo, else workspace)
+dock_autohide = false         # slide a dock snapped to a screen edge away when unused
 
 # Shared with the bridge.
 [[macros]]

@@ -498,7 +498,7 @@ class D200Driver(DeckDriver):
                     os.utime(os.path.join(_ICON_DIR, n))
         if key != self._last_panel_key or not paths_ok:
             try:
-                img = compose_panel(panel)
+                img = compose_panel(panel, icons=self._icons)
                 os.makedirs(_ICON_DIR, exist_ok=True)
                 h = hashlib.sha1(f"{TILE_VERSION}|{key!r}".encode()).hexdigest()[:12]
                 # `names` is rebound only AFTER a successful save: rebinding

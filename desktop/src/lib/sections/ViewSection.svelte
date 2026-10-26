@@ -8,14 +8,18 @@
   import ProjectIconsField from "../fields/ProjectIconsField.svelte";
   import { defineMessages, fieldHelp, fmt, locale } from "../i18n.svelte";
   import defaults from "../configDefaults.json";
+  import type { InvokeFn } from "../deckClient";
+  import { fallbackThemes, fetchThemes, themeOptions, type DeckTheme } from "../themesClient";
   import {
     getAt, setAt, removeAt, listFieldState, setListField,
     inheritedFor, overrideState, overrideValue, setOverride, clearOverride,
     type ListFieldState, type ConfigPayload,
   } from "../configClient";
 
-  let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null }:
-    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null } = $props();
+  let { payload = $bindable(), onChange, onError, reloadRev = 0, editProfile = null, invoke = null }:
+    { payload: ConfigPayload; onChange: () => void; onError: (msg: string) => void; reloadRev?: number; editProfile?: string | null;
+      // Tauri `invoke` for GET /themes; null (browser preview / tests) offers the built-ins only.
+      invoke?: InvokeFn | null } = $props();
 
   const SEC = "view";
   const MANAGEMENT = ["launcher_menu", "bottom_row"];
@@ -49,6 +53,7 @@
       advanced: "Advanced panel settings",
       backend_labels: "Show T3 / HERDR labels",
       heading: "Emphasize", project: "Project", thread: "Thread", custom: "Custom", heading_help: "Choose the bold tile heading. The other name appears underneath. Threads without a name show their project.",
+      theme_errors: "Not loaded (drawn as classic): {list}",
     },
     cs: {
       none: "(nic)",
@@ -60,6 +65,7 @@
       advanced: "Pokročilé nastavení panelu",
       backend_labels: "Zobrazovat štítky T3 / HERDR",
       heading: "Zvýraznit", project: "Projekt", thread: "Thread", custom: "Vlastní", heading_help: "Vyberte tučný nadpis dlaždice. Druhý název se zobrazí pod ním. Thread bez názvu zobrazí projekt.",
+      theme_errors: "Nenačteno (kreslí se jako classic): {list}",
     },
   });
   const lm = $derived(LM[locale.lang]);
@@ -71,8 +77,23 @@
   const collapseIdle = $derived((getAt(payload, "base", SEC, "collapse_idle") as boolean) ?? defaults.view.collapse_idle);
   const workingAnimation = $derived((getAt(payload, "base", SEC, "working_animation") as string) ?? defaults.view.working_animation);
   const tileFill = $derived((getAt(payload, "base", SEC, "tile_fill") as string) ?? defaults.view.tile_fill);
+  const ICON_FALLBACKS = ["monogram", "agent"];
+  const iconFallback = $derived((getAt(payload, "base", SEC, "project_icon_fallback") as string) ?? defaults.view.project_icon_fallback);
   const tileIcon = $derived((getAt(payload, "base", SEC, "tile_icon") as string) ?? defaults.view.tile_icon);
   const uiLanguage = $derived((getAt(payload, "base", SEC, "language") as string) ?? defaults.view.language);
+  const deckTheme = $derived((getAt(payload, "base", SEC, "deck_theme") as string) ?? defaults.view.deck_theme);
+  // Deck looks: built-ins at once, then whatever the runtime lists (user themes).
+  let themes = $state<DeckTheme[]>(fallbackThemes());
+  $effect(() => {
+    const call = invoke;
+    let live = true;
+    void fetchThemes(call).then((list) => { if (live) themes = list; });
+    return () => { live = false; };
+  });
+  const deckThemeOptions = $derived(themeOptions(themes));
+  const themeErrors = $derived(
+    themes.filter((t) => t.error != null).map((t) => `${t.id} (${t.error})`).join(" · "),
+  );
   function set(key: string, value: unknown): void { payload = setAt(payload, "base", SEC, key, value); onChange(); }
   function setBaseTri(key: string, state: ListFieldState, list: string[]): void { payload = setListField(payload, "base", SEC, key, state, list); onChange(); }
   const visibleTileFields = $derived((overlay
@@ -198,6 +219,10 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
+    <OverrideField label="deck_theme" help={HELP.deck_theme} state={scState("deck_theme")} inheritedDisplay={hint("deck_theme")} onstate={(s) => setScState("deck_theme", s)}>
+      <SelectField label="" value={String(scValue("deck_theme") ?? "classic")} options={deckThemeOptions} onchange={(v) => setSc("deck_theme", v)} />
+    </OverrideField>
+    {#if themeErrors}<small class="theme-errors" role="status">{fmt(lm.theme_errors, { list: themeErrors })}</small>{/if}
     <SelectField label={lm.heading} help={lm.heading_help} configKey="tile_primary · tile_secondary" value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
     <BooleanField label={lm.backend_labels} help={HELP.backend_labels} configKey="tile_fields" value={backendLabels} onchange={setBackendLabels} />
     <OverrideField label="working_animation" help={HELP.working_animation} state={scState("working_animation")} inheritedDisplay={hint("working_animation")} onstate={(s) => setScState("working_animation", s)}>
@@ -228,11 +253,14 @@
     </details>
   </FieldGroup>
   <FieldGroup title={lm.appearance}>
+    <SelectField label="deck_theme" help={HELP.deck_theme} value={deckTheme} options={deckThemeOptions} onchange={(v) => set("deck_theme", v)} />
+    {#if themeErrors}<small class="theme-errors" role="status">{fmt(lm.theme_errors, { list: themeErrors })}</small>{/if}
     <SelectField label={lm.heading} help={lm.heading_help} configKey="tile_primary · tile_secondary" value={heading} options={[lm.project, lm.thread, lm.custom]} onchange={setHeading} />
     <BooleanField label={lm.backend_labels} help={HELP.backend_labels} configKey="tile_fields" value={backendLabels} onchange={setBackendLabels} />
     <SelectField label="working_animation" help={HELP.working_animation} value={workingAnimation} options={WORKING_ANIMATIONS} onchange={(v) => set("working_animation", v)} />
     <SelectField label="tile_fill" help={HELP.tile_fill} value={tileFill} options={TILE_FILLS} onchange={(v) => set("tile_fill", v)} />
     <SelectField label="tile_icon" help={HELP.tile_icon} value={tileIcon} options={TILE_ICONS} onchange={(v) => set("tile_icon", v)} />
+    <SelectField label="project_icon_fallback" help={HELP.project_icon_fallback} value={iconFallback} options={ICON_FALLBACKS} onchange={(v) => set("project_icon_fallback", v)} />
     <ProjectIconsField label="project_icons" help={HELP.project_icons} entries={stringMap(getAt(payload, "base", SEC, "project_icons"))} resetKey={`base:${reloadRev}:view:project_icons`} onchange={setProjectIcons} {onError} />
   </FieldGroup>
   <FieldGroup title={lm.content}>
@@ -247,4 +275,5 @@
   .advanced-settings { margin: var(--s5) 0 0; }
   .advanced-settings summary { color: var(--text-dim); cursor: pointer; font: var(--t-label); user-select: none; }
   .advanced-settings[open] summary { color: var(--text); margin-bottom: var(--s2); }
+  .theme-errors { display: block; padding: var(--s2) 0; color: var(--text-dim); font: var(--t-label); }
 </style>

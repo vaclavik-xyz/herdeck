@@ -192,13 +192,42 @@ pub(crate) async fn deck_tile(
 /// when the image does and is not forwarded. A missing tile/panel is a 404
 /// (the `<img>` fires `error`), no discovery yet a 503, an unreachable runtime
 /// a 502. `deck_tile`/`deck_panel` stay as the fallback transport.
+/// - project favicons: `herdeck://localhost/project-icon/<16 hex>` (the mini dock).
 pub(crate) const IMAGE_SCHEME: &str = "herdeck";
 
+/// Prefix of the runtime's project favicon route (`dock_data.project_icon_png`).
+pub(crate) const PROJECT_ICON_PREFIX: &str = "/project-icon/";
+
+/// Prefix of the runtime's agent-logo route (`dock_data.agent_mark_png`), the
+/// dock's fallback for a project without a favicon.
+pub(crate) const AGENT_MARK_PREFIX: &str = "/agent-mark/";
+
+/// An agent type slug: 1-32 of `[a-z0-9_-]` (the runtime's `AGENT_TYPE_RE`).
+pub(crate) fn is_agent_type(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 32
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// A project icon content hash: exactly 16 lowercase hex digits (the runtime's
+/// `ICON_HASH_RE`). Anything else never reaches the runtime.
+pub(crate) fn is_icon_hash(s: &str) -> bool {
+    s.len() == 16 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Map a request path on the image scheme to the runtime endpoint it proxies —
-/// only `/panel` and `/tile/<index>` (decimal) are served, nothing else.
+/// only `/panel`, `/tile/<index>` (decimal), `/project-icon/<hash>` and
+/// `/agent-mark/<type>` are served, nothing else.
 pub(crate) fn image_proxy_path(uri_path: &str) -> Option<String> {
     if uri_path == "/panel" {
         return Some("/panel".to_string());
+    }
+    if let Some(hash) = uri_path.strip_prefix(PROJECT_ICON_PREFIX) {
+        return is_icon_hash(hash).then(|| format!("{PROJECT_ICON_PREFIX}{hash}"));
+    }
+    if let Some(kind) = uri_path.strip_prefix(AGENT_MARK_PREFIX) {
+        return is_agent_type(kind).then(|| format!("{AGENT_MARK_PREFIX}{kind}"));
     }
     let index = uri_path.strip_prefix("/tile/")?;
     if index.is_empty() || index.len() > 4 || !index.bytes().all(|b| b.is_ascii_digit()) {
@@ -207,16 +236,34 @@ pub(crate) fn image_proxy_path(uri_path: &str) -> Option<String> {
     index.parse::<u32>().ok().map(|i| format!("/tile/{i}"))
 }
 
+/// Cache policy for a proxied image. Tile/panel versions restart from zero
+/// with the runtime, so the same `?v=` can name a different image later:
+/// revalidate. A project icon is content-addressed — its hash never names
+/// other bytes — so the WebView may keep it for a day.
+pub(crate) fn image_cache_control(proxied: &str) -> &'static str {
+    if proxied.starts_with(PROJECT_ICON_PREFIX) || proxied.starts_with(AGENT_MARK_PREFIX) {
+        "max-age=86400"
+    } else {
+        "no-cache"
+    }
+}
+
 pub(crate) fn image_response(status: u16, png: Vec<u8>) -> tauri::http::Response<Vec<u8>> {
+    image_response_cached(status, png, "no-cache")
+}
+
+/// A scheme response: a 200 carries `image/png` and `cache_control`; anything
+/// else is `no-store` so a transient 404/502 is never remembered.
+pub(crate) fn image_response_cached(
+    status: u16,
+    png: Vec<u8>,
+    cache_control: &str,
+) -> tauri::http::Response<Vec<u8>> {
     let mut builder = tauri::http::Response::builder().status(status);
     if status == 200 {
-        // Versions restart from zero when the runtime restarts, so the same
-        // `?v=` can name a different image later: revalidate rather than trust
-        // a cached copy. An unchanged `src` is never re-requested by the <img>
-        // anyway, which is where the saving is.
         builder = builder
             .header("Content-Type", "image/png")
-            .header("Cache-Control", "no-cache");
+            .header("Cache-Control", cache_control);
     } else {
         builder = builder.header("Cache-Control", "no-store");
     }
@@ -239,7 +286,7 @@ pub(crate) fn serve_image_request(app: &tauri::AppHandle, uri_path: &str) -> tau
         return image_response(503, Vec::new());
     };
     match http::fetch_png(&d.host, d.port, &path, &d.token, SIDECAR_TIMEOUT) {
-        Ok(Some(png)) => image_response(200, png),
+        Ok(Some(png)) => image_response_cached(200, png, image_cache_control(&path)),
         Ok(None) => image_response(404, Vec::new()),
         Err(err) => {
             eprintln!("herdeck: image proxy {path}: {err}");

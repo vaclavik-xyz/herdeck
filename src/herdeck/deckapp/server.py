@@ -20,7 +20,15 @@ from ..orchestrator import Orchestrator
 from ..pins import PinStore
 from ..protocol import WIRE_PROTOCOL
 from ..shared_settings import overlaid_shared_keys
-from . import agent_card, bridge_update, hooks_relay, settings_relay, stats, usage_agent_relay
+from . import (
+    agent_card,
+    bridge_update,
+    dock_data,
+    hooks_relay,
+    settings_relay,
+    stats,
+    usage_agent_relay,
+)
 from .sinks import RenderFrame
 from .source import StateSource
 
@@ -207,6 +215,15 @@ class DeckApp:
         # version on a digest change too — else long-poll waiters sleep on
         # stale data until their timeout.
         self._state_digest: str | None = None
+        # /agent/list (the desktop mini dock) has its OWN version: it moves only
+        # when a row would change (dock_data.list_signature), never for an
+        # animation frame, so a dock beside a spinning deck is not woken every
+        # tick. Shares _state_changed for its waiters.
+        self._agent_list_version = 0
+        self._agent_list_sig: tuple | None = None
+        # Decoded /project-icon PNGs by hash (content-addressed, so never stale).
+        self._icon_pngs: dict[str, bytes] = {}
+        self._icon_pngs_lock = threading.Lock()
         # Rasterization (IconProvider + Pillow) is not thread-safe, but it must
         # not hold self._lock either: the ticker rasterizes OUTSIDE the state
         # lock under this one. Lock order is always self._lock -> _raster_lock.
@@ -454,7 +471,9 @@ class DeckApp:
             buf = io.BytesIO()
             # The desktop window shows the panel in a 2-cells-wide grid box, so
             # compose at the two-cell width — the native 458px would be squeezed.
-            compose_panel(rs.panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
+            compose_panel(rs.panel, width=PANEL_W_TWO_CELL, icons=icon_provider).convert(
+                "RGB"
+            ).save(buf, "PNG")
             panel_png = buf.getvalue()
             self._panel_memo = (panel_key, panel_png)
         sections = {t.index: t.section for t in rs.tiles if t.index < slots and t.section}
@@ -487,6 +506,11 @@ class DeckApp:
         if digest != self._state_digest:
             self._state_digest = digest
             self._bump()
+        sig = self._agent_list_signature_locked()
+        if sig != self._agent_list_sig:
+            self._agent_list_sig = sig
+            self._agent_list_version += 1
+            self._state_changed.notify_all()
 
     def _state_meta_locked(self) -> dict:
         """The /state fields derived from the source/bridges rather than from
@@ -1105,6 +1129,97 @@ class DeckApp:
                 self._state_waiters -= 1
         return self._state()
 
+    def _agent_list_signature_locked(self):
+        """The source's /agent/list change key (None without one). Callers
+        hold self._lock; must not raise (see _apply_rendered_locked)."""
+        fn = getattr(self._source, "agent_list_signature", None)
+        if not callable(fn):
+            return None
+        try:
+            return fn()
+        except Exception:
+            log.debug("agent list signature failed", exc_info=True)
+            return self._agent_list_sig
+
+    def usage_payload(self) -> dict:
+        """GET /usage: the usage hub's snapshot in wire form (the same shape a
+        frame's ``providers`` carries); empty when usage is off."""
+        from ..usage import usage_to_wire
+
+        poller = getattr(self, "_usage_poller", None)
+        if poller is None:
+            return {"providers": []}
+        try:
+            return {"providers": usage_to_wire(poller.snapshot())}
+        except Exception:
+            log.debug("usage snapshot failed", exc_info=True)
+            return {"providers": []}
+
+    def agent_list(self, after: int | None, wait_ms: int) -> dict | None:
+        """GET /agent/list (dock_data.py): every active agent as a row for
+        the desktop mini dock. With ``after``, a long-poll like /state: return
+        once the list version differs from it, or after ``wait_ms`` (clamped to
+        STATE_WAIT_MAX_MS). None when the source has no agents API."""
+        semantic = getattr(self._source, "semantic_agents", None)
+        if not callable(semantic):
+            return None
+        if after is not None:
+            timeout = min(self.STATE_WAIT_MAX_MS, max(0, wait_ms)) / 1000.0
+            with self._lock:
+                self._state_changed.wait_for(
+                    lambda: self._agent_list_version != after, timeout=timeout
+                )
+        with self._lock:
+            # Read BEFORE the rows: a change landing in between then shows up
+            # as a newer version on the client's next poll, never a lost one.
+            version = self._agent_list_version
+        source = self._source
+        agents = semantic()  # takes the deck lock itself: never hold it here
+        with self._lock:
+            orch = self._orch
+            since = {a.key: orch.status_elapsed(a.key) for a in agents}
+        connections = getattr(source, "connections", None)
+        if not isinstance(connections, dict):
+            connections = {}
+        view = source.config.view
+        return {
+            "version": version,
+            "language": getattr(source, "language", view.language),
+            "connected": bool(source.connected),
+            "icon_fallback": dock_data.icon_fallback_of(view),
+            "agents": dock_data.agent_rows(
+                agents,
+                since=since,
+                connections=connections,
+                overrides=view.project_icons or {},
+            ),
+        }
+
+    _ICON_PNG_CACHE_MAX = 64
+
+    def project_icon(self, icon_hash: str) -> tuple[int, bytes | None]:
+        """GET /project-icon/<hash> (dock_data.project_icon_png), memoised by
+        hash. Decoding runs under the raster lock: the SVG rasterizer shares
+        the render path's thread-safety rules."""
+        with self._icon_pngs_lock:
+            hit = self._icon_pngs.get(icon_hash)
+        if hit is not None:
+            return 200, hit
+        with self._raster_lock:
+            code, png = dock_data.project_icon_png(icon_hash)
+        if code == 200 and png is not None:
+            with self._icon_pngs_lock:
+                if len(self._icon_pngs) >= self._ICON_PNG_CACHE_MAX:
+                    self._icon_pngs.pop(next(iter(self._icon_pngs)))
+                self._icon_pngs[icon_hash] = png
+        return code, png
+
+    def agent_mark(self, agent_type: str) -> tuple[int, bytes | None]:
+        """GET /agent-mark/<type> (dock_data.agent_mark_png), under the raster
+        lock like every other glyph rasterisation."""
+        with self._raster_lock:
+            return dock_data.agent_mark_png(agent_type, self._icons)
+
     def _state(self) -> dict:
         self._note_state_read()
         self._refresh_if_stale()
@@ -1313,7 +1428,7 @@ class DeckApp:
             def log_message(self, *a):  # never log requests (could carry the token)
                 pass
 
-            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8", headers=None):
                 # keep-alive safety: a rejected POST (bad token, 404) may leave
                 # its request body unread on the persistent connection — the
                 # next request would be parsed from those leftover bytes.
@@ -1326,6 +1441,8 @@ class DeckApp:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 if body:
                     self.wfile.write(body)
@@ -1393,6 +1510,16 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._health()).encode(), "application/json")
+                elif path == "/themes":
+                    # Deck looks for the editor's [view].deck_theme select:
+                    # built-ins + user themes in <config dir>/themes (with
+                    # their load error, if any). Rescans the folder.
+                    if not self._require_query_token(url):
+                        return
+                    from ..themes.registry import default_registry
+
+                    themes = [info.as_json() for info in default_registry().list()]
+                    self._send(200, json.dumps(themes).encode(), "application/json")
                 elif path == "/maintenance":
                     if not self._require_query_token(url):
                         return
@@ -1441,6 +1568,52 @@ class DeckApp:
                     if not self._require_query_token(url):
                         return
                     self._send(200, json.dumps(app._setup_status()).encode(), "application/json")
+                elif path == "/agent/list":
+                    # The desktop mini dock's fleet (dock_data.py), long-polled.
+                    if not self._require_query_token(url):
+                        return
+                    params = parse_qs(url.query)
+                    try:
+                        after = int(params["after"][0]) if "after" in params else None
+                        wait_ms = int(params.get("wait_ms", ["0"])[0])
+                    except (TypeError, ValueError):
+                        self._send(400)
+                        return
+                    payload = app.agent_list(after, wait_ms)
+                    self._send_agent(200 if payload is not None else 404, payload)
+                elif path == "/usage":
+                    # Provider usage for the desktop dock's footer rings.
+                    if not self._require_query_token(url):
+                        return
+                    self._send_agent(200, app.usage_payload())
+                elif path.startswith("/project-icon/"):
+                    # A project favicon as a small PNG for the mini dock.
+                    if not self._require_query_token(url):
+                        return
+                    code, png = app.project_icon(path[len("/project-icon/") :])
+                    if png is None:
+                        self._send(code)
+                    else:
+                        self._send(
+                            code,
+                            png,
+                            "image/png",
+                            headers={"Cache-Control": dock_data.PROJECT_ICON_CACHE_CONTROL},
+                        )
+                elif path.startswith("/agent-mark/"):
+                    # The agent's logo as a PNG: the dock's no-favicon fallback.
+                    if not self._require_query_token(url):
+                        return
+                    code, png = app.agent_mark(path[len("/agent-mark/") :])
+                    if png is None:
+                        self._send(code)
+                    else:
+                        self._send(
+                            code,
+                            png,
+                            "image/png",
+                            headers={"Cache-Control": dock_data.PROJECT_ICON_CACHE_CONTROL},
+                        )
                 elif path.startswith("/agent/"):
                     if not self._require_query_token(url):
                         return

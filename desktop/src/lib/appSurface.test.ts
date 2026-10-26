@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appSurface, desktopSetupVisible, windowRole } from "./appSurface";
+import { appSurface, desktopSetupVisible, windowRole, floatingContent } from "./appSurface";
 
 describe("appSurface", () => {
   it("routes by window ROLE, not by a window mode", () => {
@@ -52,5 +52,23 @@ describe("windowRole / the cross-language role contract", () => {
     const doc = document.implementation.createHTMLDocument("");
     expect(windowRole(doc)).toBeUndefined();
     expect(windowRole(undefined)).toBeUndefined();
+  });
+});
+
+// Rust stamps `data-floating` = "dock" | "deck" before first paint
+// (deck_prefs::floating_script; pinned there by
+// the_floating_script_stamps_the_attribute_and_prefers_a_reloaded_choice).
+// This pins the frontend's half: the dataset key and the dock default.
+describe("floatingContent / the cross-language floating contract", () => {
+  it("reads dataset.floating, defaulting to the dock", () => {
+    const doc = document.implementation.createHTMLDocument("");
+    expect(floatingContent(doc)).toBe("dock");
+    doc.documentElement.dataset.floating = "deck";
+    expect(floatingContent(doc)).toBe("deck");
+    doc.documentElement.dataset.floating = "dock";
+    expect(floatingContent(doc)).toBe("dock");
+    doc.documentElement.dataset.floating = "sideways";
+    expect(floatingContent(doc)).toBe("dock");
+    expect(floatingContent(undefined)).toBe("dock");
   });
 });

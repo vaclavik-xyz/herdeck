@@ -28,3 +28,13 @@ export function desktopSetupVisible(
 ): boolean {
   return surface === "desktop" && view !== "deck" && !hidden;
 }
+
+export type FloatingContent = "dock" | "deck";
+
+/** What the floating (deck-role) window shows, from `<html data-floating>`
+ *  stamped by Rust before first paint (`deck_prefs::floating_script`):
+ *  exactly "deck" is the hardware mirror, anything else the mini dock —
+ *  the same default Rust's `parse_floating` applies. */
+export function floatingContent(doc: Document | undefined): FloatingContent {
+  return doc?.documentElement.dataset.floating === "deck" ? "deck" : "dock";
+}

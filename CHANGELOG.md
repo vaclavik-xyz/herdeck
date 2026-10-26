@@ -6,6 +6,90 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Deck themes: `[view].deck_theme` (editor: View → Deck look) picks how the
+  deck draws its keys and status window. `classic`, today's look, is the
+  default and renders pixel-identically (same cache files). User themes are
+  Python files in `themes/` next to `config.toml`, written against the
+  versioned API in `herdeck.themes.api` (`API_VERSION = 1`) and documented in
+  `docs/themes.md`; a broken theme is reported in the editor and draws
+  classic. New runtime route `GET /themes`.
+- `[view].project_icon_fallback`: show the agent's logo instead of the monogram
+  for projects without a favicon.
+- Three built-in deck looks for `[view].deck_theme`: `signal` (the project's
+  favicon and the task title on a dark key; status shown by colour AND frame
+  shape: open frame working, thin idle, dot done, dashed waiting, amber key
+  blocked, slashed offline; a status window of favicon queue chips and ring
+  counters, laid out so no text or number sits on the Elgato key seam), `headline` (big
+  project name and time on the status colour) and `quiet` (only an agent that
+  needs you is loud). Every text is at least 22 px so it reads on the D200's
+  72 px keys.
+- Mini dock: the desktop app's floating window is now a narrow, always-on-top,
+  draggable strip of the agents that are not idle (status rings, idle folded
+  into `+N`). Hover, focus or click an agent for a card with its task, elapsed
+  time, the blocked prompt with deck-coloured answer buttons, and **Open in
+  herdr**. The strip keeps its place on screen while cards open beside it.
+- Runtime routes `GET /agent/list` (token-gated; `after`/`wait_ms` long-poll
+  capped at 25 s, with its own version that ignores animation frames) and
+  `GET /project-icon/<hash>` (the project favicon as a 96 px PNG,
+  `Cache-Control: max-age=86400`; 400 for a malformed hash, 404 when unknown).
+- `GET /agent-mark/<type>` (96 px PNG, `Cache-Control: max-age=86400`; 400 for a
+  malformed type) serves the agent logo the mini dock uses as a favicon
+  fallback when `[view].project_icon_fallback` is `"agent"`; `/agent/list`
+  reports it as `icon_fallback`.
+- Mini dock project groups and strip filter: `[desktop].dock_group` (default
+  on) folds two or more non-blocked agents of one project (repo, else
+  workspace) into one item — project mark, ring in the most urgent member's
+  status, count badge — that expands inline on hover/focus (members slide out
+  staggered) and folds back 400 ms after the pointer leaves; blocked agents
+  never fold. `[desktop].dock_show` (`"active"` default, `"all"`,
+  `"needs_you"`) picks who gets an item; the rest fold into `+N`.
+  `[desktop].dock_autohide` (default off) is in the editor. All three apply
+  live after Apply (`reload_floating` emits `dock-prefs-changed` to the dock).
+- Mini dock card: a live output tail (the last 8 lines of the pane as plain
+  text, from a 100×24 terminal preview session that closes with the card,
+  collapsible and remembered per viewer) and a reply field for agents that
+  take free text (Enter sends via `/agent/text`, Shift+Enter is a newline,
+  sending / sent / error shown inline, the text kept on error).
+- Mini dock keyboard answer flow: with `[desktop].floating = "dock"` the
+  `[hotkeys].next_blocked` shortcut (e.g. `Alt+Cmd+H`) remembers the
+  frontmost app, focuses the dock and opens the longest-blocked agent's card
+  (again = the next one; "Nobody is waiting" when none is). In the card `1`–`9`
+  answers, `Tab` / `Shift+Tab` moves between blocked agents, `T` or `/` focuses
+  the reply, `O` opens in herdr and `Esc` closes; keys are ignored while
+  typing a reply (Esc there only leaves the field). After an answer, Esc or
+  Open in herdr the focus goes back to the previous app (new command
+  `dock_release_focus`; macOS only). Deck mode keeps `POST /triage`.
+- Mini dock edge snap and autohide: a strip dropped within 24 px of the left
+  or right work-area edge snaps flush to it once the drag ends (macOS waits
+  for the mouse button to come up, so a pause mid-drag never snaps). With
+  `[desktop].dock_autohide` on, a snapped strip slides out (180 ms, CSS
+  transform) 1.2 s after the pointer leaves and the window shrinks to a 6 px
+  sliver in the most urgent status's colour; resting on it
+  slides the strip back. A card, an expanded group, keyboard focus or any
+  blocked agent keeps it out. `dock_layout` takes `sliverWidth` and reports
+  the snapped `edge`; Rust emits `dock-moved` after a drop.
+- Mini dock with T3 threads: a thread's card shows its latest text and its own
+  actions in any status (approve/deny, Mark seen, Snooze, Settle…) instead of
+  the herdr-only output tail and Open in herdr; an idle thread in the `+N`
+  list is a plain row, not a herdr focus button. `/agent/list` rows carry
+  `backend`, a T3 waiting label (CI, SUBAGENT) as `waiting_on`, and a
+  thread's T3 project name (not its workspace path; "No project" for a
+  project-less thread) as its repo. A project-less thread shows the deck's
+  bundled no-project glyph (served as `/project-icon/0000000000000001`)
+  instead of a monogram.
+
+### Changed
+- `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)
+  picks what the floating window shows; Apply switches it live. With no
+  `deck_always_on_top` and no legacy `window_mode`, the floating window now
+  stays on top in dock mode (the deck mirror keeps the old default, off).
+
+### Fixed
+- Mini dock: a project group expanded near the bottom of the screen no longer
+  runs the strip off the work area; the strip is drawn lifted just enough and
+  returns to its place when the group folds.
+
 ## [0.18.0] - 2026-10-26
 
 ### Added

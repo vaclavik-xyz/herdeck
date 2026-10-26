@@ -97,6 +97,9 @@ export type TermPoll =
   | { kind: "gone" }
   | { kind: "error"; message: string };
 
+/** Longest free-text reply the runtime accepts (agent_card.CARD_TEXT_MAX). */
+export const TEXT_MAX_CHARS = 4000;
+
 /** How long a terminal long-poll may be held (runtime clamps to 15 s). */
 export const TERM_POLL_MS = 12000;
 

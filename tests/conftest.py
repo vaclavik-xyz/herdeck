@@ -111,3 +111,14 @@ def _isolated_bridge_telegram(tmp_path, monkeypatch):
         ),
         raising=False,
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_theme_registry(tmp_path_factory, monkeypatch):
+    """Never scan the developer's real ~/.config/herdeck/themes."""
+    from herdeck.themes import registry
+
+    monkeypatch.setenv("HERDECK_THEMES_DIR", str(tmp_path_factory.mktemp("themes")))
+    registry.set_default_registry(None)
+    yield
+    registry.set_default_registry(None)

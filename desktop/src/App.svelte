@@ -5,11 +5,16 @@
   import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
   import ConfigApp from "./ConfigApp.svelte";
   import DeckView from "./lib/DeckView.svelte";
+  import MiniDock from "./lib/MiniDock.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
-  import { appSurface, desktopSetupVisible, windowRole } from "./lib/appSurface";
+  import { appSurface, desktopSetupVisible, floatingContent, windowRole } from "./lib/appSurface";
   import { asDiscovery, type Discovery } from "./lib/sidecar";
   import { commandTransport } from "./lib/deckClient";
   import { agentCallTransport } from "./lib/agentCardClient";
+  import { dockTransport, fetchDockPrefs } from "./lib/dockClient";
+  import { fetchUsage } from "./lib/dockUsage";
+  import { DEFAULT_DOCK_PREFS, type DockPrefs } from "./lib/dockStrip";
+  import { parsePlacement, type WindowLayoutFn } from "./lib/dockModel";
   import {
     DECK_ZOOM_EVENT,
     floatingScaleCommandFromEvent,
@@ -25,6 +30,7 @@
     floatingViewport,
     readFloatingScale,
     writeFloatingScale,
+    DOCK_SCALE_STORAGE_KEY,
     type FloatingScaleCommand,
   } from "./lib/floatingScale";
   import {
@@ -67,6 +73,31 @@
     (typeof document !== "undefined" ? windowRole(document) : undefined) ?? "app";
   const borderless = role === "deck";
   const surface = appSurface(role);
+  // What the floating window shows ([desktop].floating), stamped by Rust on
+  // <html data-floating> before first paint like the role. A live change
+  // reloads the page (Rust `reload_floating`), so a constant is enough.
+  const dockMode =
+    borderless && floatingContent(typeof document !== "undefined" ? document : undefined) === "dock";
+  // The dock's own zoom (context menu Zoom in/out/Actual size, ⌘= ⌘− ⌘0).
+  let dockScale = $state((() => {
+    if (!dockMode || typeof localStorage === "undefined") return 1;
+    try {
+      return readFloatingScale(localStorage, DOCK_SCALE_STORAGE_KEY);
+    } catch {
+      return 1;
+    }
+  })());
+
+  function applyDockScale(command: FloatingScaleCommand): void {
+    const next = changeFloatingScale(dockScale, command);
+    if (next === dockScale) return;
+    dockScale = next;
+    try {
+      writeFloatingScale(localStorage, next, DOCK_SCALE_STORAGE_KEY);
+    } catch {
+      // Zoom still applies when WebView storage is unavailable.
+    }
+  }
 
   let shell = $state<HTMLElement | undefined>(undefined);
   let desktopSetupOverlay = $state<HTMLElement | undefined>(undefined);
@@ -121,6 +152,59 @@
   const agentTransport = $derived(
     discovery ? agentCallTransport((cmd, args) => invoke(cmd, args)) : null,
   );
+  // The mini dock: /agent/list via the same token-injecting `agent_call` proxy.
+  const dock = $derived(discovery ? dockTransport((cmd, args) => invoke(cmd, args)) : null);
+  // The dock footer's usage rings: GET /usage through the same proxy.
+  const dockUsage = $derived(
+    discovery ? () => fetchUsage((cmd, args) => invoke(cmd, args)) : null,
+  );
+  // Rust sizes the window around the strip (+ an open card) and keeps the
+  // strip still on screen; it answers where the strip sits in the window.
+  const dockWindowLayout: WindowLayoutFn = async (req) =>
+    parsePlacement(await invoke("dock_layout", { ...req }));
+  // The dock's [desktop] keys (dock_group, dock_show, dock_autohide), read
+  // from the runtime's config once it is reachable and again whenever Rust's
+  // `reload_floating` says the editor applied a change (`dock-prefs-changed`),
+  // so they apply live. A failed read keeps what the dock has.
+  let dockPrefs = $state<DockPrefs>(DEFAULT_DOCK_PREFS);
+  $effect(() => {
+    if (!dockMode || !discovery) return;
+    let alive = true;
+    const refresh = async () => {
+      const next = await fetchDockPrefs((cmd, args) => invoke(cmd, args));
+      if (alive && next) dockPrefs = next;
+    };
+    untrack(() => void refresh());
+    const unlisten = listen("dock-prefs-changed", () => void refresh());
+    return () => {
+      alive = false;
+      void unlisten.then((stop) => stop());
+    };
+  });
+  // The next-blocked hotkey in dock mode: Rust remembered the frontmost app,
+  // focused this window and asks the dock to open the longest-blocked card.
+  let miniDock = $state<ReturnType<typeof MiniDock> | undefined>(undefined);
+  $effect(() => {
+    if (!dockMode) return;
+    const unlisten = listen("dock-next-blocked", () => {
+      window.focus(); // the WebView, not just the native window, takes the keys
+      miniDock?.openNextBlocked();
+    });
+    return () => void unlisten.then((stop) => stop());
+  });
+  // A drag of the dock ended (Rust may have snapped it to a screen edge):
+  // the dock lays out again and learns the edge its autohide needs.
+  $effect(() => {
+    if (!dockMode) return;
+    const unlisten = listen("dock-moved", () => miniDock?.relayout());
+    return () => void unlisten.then((stop) => stop());
+  });
+  function releaseDockFocus(): void {
+    void invoke("dock_release_focus").catch(() => {});
+  }
+  function openSettingsWindow(): void {
+    void invoke("show_app").catch(() => {});
+  }
   // Runtime /health (the shell adds its own app_version) for the notices
   // (NoticeList in the app window, DeckStatusDot in the deck window).
   const fetchHealth = $derived(discovery ? () => invoke("check_health") : null);
@@ -422,7 +506,8 @@
       const command = floatingScaleCommandForKey(event);
       if (!command) return;
       event.preventDefault();
-      void applyFloatingScale(command);
+      if (dockMode) applyDockScale(command);
+      else void applyFloatingScale(command);
     };
     window.addEventListener("keydown", onFloatingScaleKey);
 
@@ -451,7 +536,9 @@
     const zoomListener = listen(DECK_ZOOM_EVENT, (event) => {
       if (!borderless) return;
       const command = floatingScaleCommandFromEvent(event.payload);
-      if (command) void applyFloatingScale(command);
+      if (!command) return;
+      if (dockMode) applyDockScale(command);
+      else void applyFloatingScale(command);
     });
 
     // Rust emits this to the APP window only (tray's "Check for updates" item
@@ -641,6 +728,21 @@
       </div>
     {/if}
   </div>
+{:else if dockMode}
+  <MiniDock
+    bind:this={miniDock}
+    transport={dock}
+    {agentTransport}
+    windowLayout={dockWindowLayout}
+    usageSource={dockUsage}
+    scale={dockScale}
+    prefs={dockPrefs}
+    startDrag={startWindowDrag}
+    onOpenSettings={openSettingsWindow}
+    releaseFocus={releaseDockFocus}
+  >
+    <DeckStatusDot {fetchHealth} invoke={maintenanceInvoke} appUpdate={shownUpdate} />
+  </MiniDock>
 {:else}
   <main
     class:borderless

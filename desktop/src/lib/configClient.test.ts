@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DEFAULT_STATUS_COLORS } from "./statusColors";
+import configDefaults from "./configDefaults.json";
+import { DEFAULT_DOCK_PREFS } from "./dockStrip";
 import {
   parseConfig,
   effectiveStatusColors,
@@ -45,6 +47,17 @@ import {
   setNextBlockedHotkey,
   setToggleDeckHotkey,
   deckAlwaysOnTop,
+  floatingMode,
+  dockAutohide,
+  dockGroup,
+  dockPrefs,
+  dockShow,
+  setDockAutohide,
+  setDockGroup,
+  setDockShow,
+  setFloatingMode,
+  DEFAULT_FLOATING,
+  FLOATING_CHOICES,
   setDeckAlwaysOnTop,
   type ConfigPayload,
   errorCountLabel,
@@ -1042,9 +1055,15 @@ describe("deck always-on-top", () => {
   const desktop = (over: Record<string, unknown>) =>
     parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
 
-  it("defaults to false when the key is absent and there is no legacy mode", () => {
-    expect(deckAlwaysOnTop(emptyPayload())).toBe(false);
-    expect(deckAlwaysOnTop(desktop({}))).toBe(false);
+  // Row 4, mirroring deck_prefs::resolve_deck_always_on_top: with neither key
+  // the default follows the floating content — on for the dock, off for the
+  // deck mirror.
+  it("defaults on for the dock and off for the deck mirror when no key decides", () => {
+    expect(deckAlwaysOnTop(emptyPayload())).toBe(true);
+    expect(deckAlwaysOnTop(desktop({}))).toBe(true);
+    expect(deckAlwaysOnTop(desktop({ floating: "dock" }))).toBe(true);
+    expect(deckAlwaysOnTop(desktop({ floating: "deck" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ floating: "dock", window_mode: "normal" }))).toBe(false);
   });
 
   it("round-trips through the payload", () => {
@@ -1076,10 +1095,59 @@ describe("deck always-on-top", () => {
   // A wrong-typed key is treated as ABSENT, exactly like the Rust resolver's
   // `as_bool()` — so it defers to the legacy mode rather than reading as false.
   it("treats a wrong-typed key as absent, like the Rust resolver", () => {
-    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes" }))).toBe(false);
+    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes" }))).toBe(true);
+    expect(deckAlwaysOnTop(desktop({ deck_always_on_top: "yes", floating: "deck" }))).toBe(false);
     expect(
       deckAlwaysOnTop(desktop({ deck_always_on_top: "yes", window_mode: "always_on_top" })),
     ).toBe(true);
+  });
+});
+
+describe("floating window content", () => {
+  const desktop = (over: Record<string, unknown>) =>
+    parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
+
+  it("defaults to the dock, like deck_prefs::parse_floating", () => {
+    expect(DEFAULT_FLOATING).toBe("dock");
+    expect(FLOATING_CHOICES).toEqual(["dock", "deck"]);
+    expect(floatingMode(emptyPayload())).toBe("dock");
+    expect(floatingMode(desktop({ floating: "sideways" }))).toBe("dock");
+    expect(floatingMode(desktop({ floating: 3 }))).toBe("dock");
+    expect(floatingMode(desktop({ floating: "deck" }))).toBe("deck");
+  });
+
+  it("round-trips through base.desktop.floating", () => {
+    const p = setFloatingMode(emptyPayload(), "deck");
+    expect(floatingMode(p)).toBe("deck");
+    expect((p.base.desktop as Record<string, unknown>).floating).toBe("deck");
+    expect(floatingMode(setFloatingMode(p, "dock"))).toBe("dock");
+  });
+});
+
+describe("dock prefs (dock_group / dock_show / dock_autohide)", () => {
+  const desktop = (over: Record<string, unknown>) =>
+    parseConfig({ base: { desktop: over }, profiles: {}, local: {}, secrets: {} })!;
+
+  it("defaults match configDefaults.json and the dock's own defaults", () => {
+    expect(configDefaults.desktop).toMatchObject({ dock_group: true, dock_show: "active", dock_autohide: false });
+    expect(dockGroup(emptyPayload())).toBe(DEFAULT_DOCK_PREFS.group);
+    expect(dockShow(emptyPayload())).toBe(DEFAULT_DOCK_PREFS.show);
+    expect(dockAutohide(emptyPayload())).toBe(DEFAULT_DOCK_PREFS.autohide);
+    expect(dockPrefs(emptyPayload())).toEqual(DEFAULT_DOCK_PREFS);
+  });
+
+  it("ignores wrong types like the dock does", () => {
+    const p = desktop({ dock_group: "no", dock_show: "everyone", dock_autohide: 1 });
+    expect(dockPrefs(p)).toEqual(DEFAULT_DOCK_PREFS);
+  });
+
+  it("round-trips through base.desktop", () => {
+    let p = setDockGroup(emptyPayload(), false);
+    p = setDockShow(p, "needs_you");
+    p = setDockAutohide(p, true);
+    expect(p.base.desktop).toMatchObject({ dock_group: false, dock_show: "needs_you", dock_autohide: true });
+    expect(dockPrefs(p)).toEqual({ group: false, show: "needs_you", autohide: true });
+    expect(dockShow(setDockShow(p, "all"))).toBe("all");
   });
 });
 

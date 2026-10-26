@@ -393,7 +393,9 @@ class WebDeck(DeckDriver):
             buf = io.BytesIO()
             # The page shows the panel in a 2-cells-wide box (width:100%/height:100%),
             # so compose at the two-cell width — the native 458px would be squeezed.
-            compose_panel(panel, width=PANEL_W_TWO_CELL).convert("RGB").save(buf, "PNG")
+            compose_panel(panel, width=PANEL_W_TWO_CELL, icons=self._icons).convert("RGB").save(
+                buf, "PNG"
+            )
             png = buf.getvalue()
             self._panel_memo = (key, png)
         with self._lock:

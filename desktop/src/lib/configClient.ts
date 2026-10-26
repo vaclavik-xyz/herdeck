@@ -4,6 +4,8 @@
 // sidecar access token is NEVER here — the Rust shell injects it inside the
 // token-free config_* commands (see src-tauri/src/proxy.rs).
 import defaults from "./configDefaults.json";
+import type { FloatingContent } from "./appSurface";
+import { parseDockPrefs, type DockPrefs, type DockShow } from "./dockStrip";
 import { DEFAULT_STATUS_COLORS } from "./statusColors";
 import { parseBridges, parseOverlayIgnored, type BridgeShared } from "./bridgeSettings";
 
@@ -1107,16 +1109,74 @@ export function setRestartDeckHotkey(payload: ConfigPayload, value: string): Con
  *  the legacy `window_mode`, the one setting the migration can turn on. Without
  *  the fallback this checkbox would render unchecked for a migrating
  *  `always_on_top` user whose deck is in fact floating, and unchecking an
- *  already-unchecked box writes nothing, so the legacy key would win forever. */
+ *  already-unchecked box writes nothing, so the legacy key would win forever.
+ *  With neither key the default follows the floating content: on for the mini
+ *  dock, off for the deck mirror. */
 export function deckAlwaysOnTop(payload: ConfigPayload): boolean {
   const v = getAt(payload, "base", "desktop", "deck_always_on_top");
   if (typeof v === "boolean") return v;
-  return getAt(payload, "base", "desktop", "window_mode") === "always_on_top";
+  const legacy = getAt(payload, "base", "desktop", "window_mode");
+  if (typeof legacy === "string") return legacy === "always_on_top";
+  return floatingMode(payload) === "dock";
 }
 
 /** NEW payload with base.desktop.deck_always_on_top set. */
 export function setDeckAlwaysOnTop(payload: ConfigPayload, value: boolean): ConfigPayload {
   return setAt(payload, "base", "desktop", "deck_always_on_top", value);
+}
+
+/** `[desktop].floating` default, shared with Rust (deck_prefs.rs pins it). */
+export const DEFAULT_FLOATING: FloatingContent = defaults.desktop.floating === "deck" ? "deck" : "dock";
+export const FLOATING_CHOICES: FloatingContent[] = ["dock", "deck"];
+
+/** What the floating window shows. Mirrors `deck_prefs::parse_floating`:
+ *  exactly "deck" is the mirror, anything else the dock. Applied live by
+ *  `reload_floating` after Apply. */
+export function floatingMode(payload: ConfigPayload): FloatingContent {
+  return getAt(payload, "base", "desktop", "floating") === "deck" ? "deck" : DEFAULT_FLOATING;
+}
+
+/** NEW payload with base.desktop.floating set. */
+export function setFloatingMode(payload: ConfigPayload, value: FloatingContent): ConfigPayload {
+  return setAt(payload, "base", "desktop", "floating", value);
+}
+
+/** The mini dock's `[desktop]` prefs as the dock reads them (dockStrip.ts
+ *  parseDockPrefs: a missing or wrong-typed key keeps its default). The dock
+ *  re-reads them live after Apply (Rust `reload_floating` emits
+ *  `dock-prefs-changed` to the floating window). */
+export function dockPrefs(payload: ConfigPayload): DockPrefs {
+  return parseDockPrefs(asDict(payload.base).desktop);
+}
+
+/** `[desktop].dock_group`: fold a project's agents into one strip item. */
+export function dockGroup(payload: ConfigPayload): boolean {
+  return dockPrefs(payload).group;
+}
+
+/** NEW payload with base.desktop.dock_group set. */
+export function setDockGroup(payload: ConfigPayload, value: boolean): ConfigPayload {
+  return setAt(payload, "base", "desktop", "dock_group", value);
+}
+
+/** `[desktop].dock_show`: who gets an item of their own on the strip. */
+export function dockShow(payload: ConfigPayload): DockShow {
+  return dockPrefs(payload).show;
+}
+
+/** NEW payload with base.desktop.dock_show set. */
+export function setDockShow(payload: ConfigPayload, value: DockShow): ConfigPayload {
+  return setAt(payload, "base", "desktop", "dock_show", value);
+}
+
+/** `[desktop].dock_autohide`: slide the edge-snapped strip away when unused. */
+export function dockAutohide(payload: ConfigPayload): boolean {
+  return dockPrefs(payload).autohide;
+}
+
+/** NEW payload with base.desktop.dock_autohide set. */
+export function setDockAutohide(payload: ConfigPayload, value: boolean): ConfigPayload {
+  return setAt(payload, "base", "desktop", "dock_autohide", value);
 }
 
 export function commandTransport(invoke: InvokeFn): ConfigTransport {

@@ -782,6 +782,10 @@
         // set_always_on_top, not a creation-time window property, so nothing
         // restarts it — but nothing re-applies it either without this call.
         void invoke("reload_deck_always_on_top").catch(() => {});
+        // [desktop].floating switches the floating window between the mini
+        // dock and the deck mirror; Rust reloads that window's page when it
+        // changed (and does nothing otherwise).
+        void invoke("reload_floating").catch(() => {});
         if (hotkeyError != null) {
           setBanner("error", fmt(lm.hotkey_failed, { e: hotkeyError }));
         } else if (orphans.length > 0) {
@@ -1180,7 +1184,7 @@
               />
             {/if}
             {#if active === "view"}
-              <ViewSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
+              <ViewSection bind:payload {editProfile} {reloadRev} invoke={browserMode ? null : (cmd, args) => invoke(cmd, args)} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "theme"}
               <ThemeSection bind:payload {editProfile} {reloadRev} onChange={markDirty} onError={(m) => setBanner("error", m)} />
             {:else if active === "macros"}

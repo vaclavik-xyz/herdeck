@@ -17,10 +17,11 @@ pub const AGENT_WAIT_MAX_MS: u64 = 20_000;
 /// (`agent_card.CARD_REPLY_TIMEOUT_S`); leave headroom on top of it.
 pub const AGENT_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Is `path` a relayable card route? `/agent/…`, URL-safe characters only, and
+/// Is `path` a relayable card route? `/agent/…` or the dock's `/usage`, URL-safe characters only, and
 /// never a `token` query parameter of its own.
 pub fn agent_path_allowed(path: &str) -> bool {
-    if !path.starts_with("/agent/") || path.contains("..") {
+    let route = path.split_once('?').map_or(path, |(r, _)| r);
+    if !(path.starts_with("/agent/") || route == "/usage") || path.contains("..") {
         return false;
     }
     let safe = path
@@ -99,6 +100,11 @@ mod tests {
         assert!(agent_path_allowed("/agent/detail?index=3"));
         assert!(agent_path_allowed("/agent/detail?server_id=prod&pane_id=w1-p2&refresh=1"));
         assert!(agent_path_allowed("/agent/answer"));
+        assert!(agent_path_allowed("/usage"));
+        assert!(agent_path_allowed("/usage?x=1"));
+        assert!(!agent_path_allowed("/usage?token=evil"));
+        assert!(!agent_path_allowed("/usagex"));
+        assert!(!agent_path_allowed("/usage/extra"));
         assert!(!agent_path_allowed("/config"));
         assert!(!agent_path_allowed("/agentx/detail"));
         assert!(!agent_path_allowed("/agent/../config"));

@@ -186,12 +186,18 @@ def ingest_project_icon(icon, store: ProjectIconStore | None = None) -> bool:
     return target.put(icon.hash, icon.mime, icon.data)
 
 
-def tile_icon_fields(view, state, store: ProjectIconStore | None = None) -> dict:
+def tile_icon_fields(
+    view, state, store: ProjectIconStore | None = None, *, resolve_always: bool = False
+) -> dict:
     """``TileView`` kwargs (tile_icon, project_icon, project_name) for an agent
     tile. ``project_name`` is the repo name — the monogram seed and the
-    ``[view.project_icons]`` key — not the (configurable) tile text line."""
+    ``[view.project_icons]`` key — not the (configurable) tile text line.
+
+    ``resolve_always`` resolves the project mark even in ``agent`` mode: a
+    non-classic deck theme draws it whatever ``tile_icon`` says (classic never
+    reads the project fields in agent mode, so its cache names do not move)."""
     mode = getattr(view, "tile_icon", "agent")
-    if mode == "agent":
+    if mode == "agent" and not resolve_always:
         return {"tile_icon": "agent", "project_icon": None, "project_name": ""}
     name = state.repo or state.project or state.label
     target = store if store is not None else _DEFAULT
@@ -202,4 +208,7 @@ def tile_icon_fields(view, state, store: ProjectIconStore | None = None) -> dict
         # A project-less T3 thread: a neutral bundled glyph, not a monogram of
         # the scratch dir's path (an override for that path still wins).
         resolved = NO_PROJECT_ICON
+    if resolved is None and getattr(view, "project_icon_fallback", "monogram") == "agent":
+        # No favicon: draw the tile exactly as tile_icon="agent" would.
+        return {"tile_icon": "agent", "project_icon": None, "project_name": ""}
     return {"tile_icon": mode, "project_icon": resolved, "project_name": name}

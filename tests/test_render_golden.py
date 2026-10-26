@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import os
 import sys
 
-import pytest
-from PIL import Image, ImageFont
+from golden_support import UPDATE_ENV, check_goldens
+from PIL import Image, ImageDraw, ImageFont
 
 from herdeck import icons, layout
 from herdeck.driver.base import PanelGauge, PanelView, TileView
@@ -27,8 +26,9 @@ from herdeck.frozen import make_png_rasterizer
 from herdeck.model import Status
 from herdeck.project_icons import ProjectIconStore
 
+GOLDEN_FAVICON = "golden-favicon"
+
 GOLDEN_FILE = os.path.join(os.path.dirname(__file__), "goldens", "render.json")
-UPDATE_ENV = "HERDECK_UPDATE_GOLDENS"
 
 
 # --- the vendored font -------------------------------------------------------
@@ -109,6 +109,23 @@ def _tiles() -> dict[str, TileView]:
         ),
         "project_badge": _agent(Status.IDLE, tile_icon="both", project_name="t3code"),
         "label_back": TileView(0, "Back", "grey"),
+        "label_launcher": TileView(0, "+ New", "launcher"),
+        "label_drill_option": TileView(
+            0,
+            "1",
+            "amber",
+            subtext="Yes, and don't ask again for rm commands in /home/user/projects",
+        ),
+        "label_empty": TileView(0, "", "empty"),
+        "agent_working_comet": _agent(Status.WORKING, spinner=5, working_animation="comet"),
+        "agent_working_pulse": _agent(Status.WORKING, spinner=7, working_animation="pulse"),
+        "project_favicon_working": _agent(
+            Status.WORKING,
+            tile_icon="project",
+            project_icon=GOLDEN_FAVICON,
+            project_name="herdeck",
+            spinner=2,
+        ),
     }
 
 
@@ -153,11 +170,43 @@ def _panels() -> dict[str, PanelView]:
     }
 
 
-def _digest(img: Image.Image) -> str:
-    rgb = img.convert("RGB")
-    h = hashlib.sha256(f"{rgb.width}x{rgb.height}\0".encode())
-    h.update(rgb.tobytes())
-    return h.hexdigest()
+def _panels_two_cell() -> dict[str, PanelView]:
+    """Panels composed at the 392px two-cell width (web, desktop, Elgato)."""
+    panels = _panels()
+    detail = PanelView(
+        "BLOCKED · 4m",
+        ["Allow rm -rf build? This deletes the build directory and every cached artefact in it."],
+        "amber",
+        meta="claude · herdeck",
+        hint="answer on the keys",
+    )
+    sent = layout.panel_overview(
+        layout.Counts(0, 2, 1, 0), 0, 1, set(), 3, None, sent="Sent to herdeck"
+    )
+    menu = PanelView("New agent", ["Starts on m4"], headline="Pick a type")
+    return {
+        "panel_overview_392": panels["panel_overview"],
+        "panel_spotlight_392": panels["panel_spotlight"],
+        "panel_offline_392": panels["panel_offline"],
+        "panel_detail_392": detail,
+        "panel_sent_392": sent,
+        "panel_menu_392": menu,
+    }
+
+
+def _favicon_store() -> ProjectIconStore:
+    """A store holding one deterministic PNG favicon (a red rounded app tile
+    with a white square), drawn without anti-aliasing so it is the same
+    bytes on every OS."""
+    img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((2, 2, 29, 29), fill=(200, 40, 60, 255))
+    draw.rectangle((10, 10, 21, 21), fill=(255, 255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    store = ProjectIconStore()
+    store.put(GOLDEN_FAVICON, "image/png", buf.getvalue())
+    return store
 
 
 def _render_all(tmp_path) -> dict[str, Image.Image]:
@@ -168,55 +217,82 @@ def _render_all(tmp_path) -> dict[str, Image.Image]:
         slug_map={},
         fetch=lambda slug: None,
         rasterize=make_png_rasterizer(icons._ASSETS_DIR),
-        project_icons=ProjectIconStore(),
+        project_icons=_favicon_store(),
     )
     out = {n: Image.open(io.BytesIO(provider.render_tile_bytes(t))) for n, t in _tiles().items()}
     out.update({n: icons.compose_panel(p) for n, p in _panels().items()})
+    out.update(
+        {
+            n: icons.compose_panel(p, width=icons.PANEL_W_TWO_CELL)
+            for n, p in _panels_two_cell().items()
+        }
+    )
     return out
 
 
-def _load_goldens() -> dict[str, str]:
-    try:
-        with open(GOLDEN_FILE, encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        return {}
-
-
 def test_rendered_tiles_and_panels_match_goldens(tmp_path):
-    rendered = _render_all(tmp_path)
-    actual = {name: _digest(img) for name, img in sorted(rendered.items())}
-    if os.environ.get(UPDATE_ENV):
-        os.makedirs(os.path.dirname(GOLDEN_FILE), exist_ok=True)
-        with open(GOLDEN_FILE, "w", encoding="utf-8") as fh:
-            json.dump(actual, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        pytest.skip(f"{UPDATE_ENV} set: rewrote {GOLDEN_FILE}")
-    goldens = _load_goldens()
-    mismatched = sorted(n for n in actual if goldens.get(n) != actual[n])
-    stale = sorted(set(goldens) - set(actual))
-    if not mismatched and not stale:
-        return
-    out_dir = os.environ.get("HERDECK_GOLDEN_OUT") or str(tmp_path / "golden-actual")
-    os.makedirs(out_dir, exist_ok=True)
-    lines = []
-    for name in mismatched:
-        path = os.path.join(out_dir, f"{name}.png")
-        rendered[name].convert("RGB").save(path)
-        lines.append(
-            f"  {name}: expected {goldens.get(name, '<missing>')[:16]}"
-            f" got {actual[name][:16]}  -> {path}"
-        )
-    lines += [f"  {name}: golden has no matching render (remove it)" for name in stale]
-    pytest.fail(
-        "Rendered pixels changed:\n"
-        + "\n".join(lines)
-        + "\n\nIf the change is intended (a composition change also bumps"
-        " icons.TILE_VERSION), look at the PNGs above, then regenerate with\n"
-        f"  {UPDATE_ENV}=1 python -m pytest tests/test_render_golden.py\n"
-        "and commit tests/goldens/render.json. The goldens are OS-independent"
+    check_goldens(
+        _render_all(tmp_path),
+        GOLDEN_FILE,
+        tmp_path,
+        title="Rendered pixels changed",
+        note="If the change is intended (a composition change also bumps"
+        " icons.TILE_VERSION), look at the PNGs above, then regenerate with",
+        after="and commit tests/goldens/render.json. The goldens are OS-independent"
         " (vendored Inter font, pre-baked marks): a mismatch on only one OS is a"
-        " determinism bug, not a golden to regenerate.\n"
-        "New digests:\n" + json.dumps({n: actual[n] for n in mismatched}, indent=2),
-        pytrace=False,
+        " determinism bug, not a golden to regenerate.",
+        regenerate=f"{UPDATE_ENV}=1 python -m pytest tests/test_render_golden.py",
+        show_new_digests=True,
     )
+
+
+# --- classic cache names -----------------------------------------------------
+# The D200 reads tiles and panels by file name; a theme platform must not
+# rename a single classic file (a rename is a full re-render + re-upload of
+# every key). Pinned with assets_dir=None so the bundled-asset fingerprint
+# ("0") cannot move them.
+
+CLASSIC_TILE_NAMES = {
+    "agent_idle": "tile_3a0393c756bf115d.png",
+    "agent_spin": "tile_5c7bf4622f8e8609.png",
+    "agent_pulse": "tile_ea94e6dc06e6fc94.png",
+    "label_back": "tile_004b4b13a82856cc.png",
+    "empty": "tile_9fc63986125b309c.png",
+}
+
+
+def _name_tiles() -> dict[str, TileView]:
+    def agent(**kw) -> TileView:
+        base = dict(
+            agent_type="claude", repo="herdeck", branch="main", status_text="WORKING", time_text="3m"
+        )
+        base.update(kw)
+        return TileView(0, "herdeck", "green", **base)
+
+    return {
+        "agent_idle": agent(status_text="IDLE"),
+        "agent_spin": agent(spinner=3),
+        "agent_pulse": agent(spinner=7, working_animation="pulse"),
+        "label_back": TileView(0, "Back", "grey"),
+        "empty": TileView(0, "", "empty"),
+    }
+
+
+def test_classic_tile_cache_names_are_stable(tmp_path):
+    provider = icons.IconProvider(
+        cache_dir=str(tmp_path / "cache"),
+        slug_map={},
+        fetch=lambda slug: None,
+        assets_dir=None,
+        project_icons=ProjectIconStore(),
+    )
+    names = {n: provider._tile_name(t)[0] for n, t in _name_tiles().items()}
+    assert names == CLASSIC_TILE_NAMES
+
+
+def test_classic_panel_cache_key_is_stable():
+    """d200.py names the panel file sha1(TILE_VERSION|repr(cache_key))."""
+    panel = layout.panel_overview(layout.Counts(1, 3, 2, 1, waiting=1), 0, 2, set(), 8, None)
+    digest = hashlib.sha1(repr(panel.cache_key()).encode()).hexdigest()[:12]
+    assert digest == "d498fae3290e"
+    assert icons.TILE_VERSION == 21

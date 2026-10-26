@@ -43,6 +43,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       show_profile_on_panel: "Shows the active profile name on the status panel; not used when rendering yet.",
       working_animation: "Working-tile animation: pulse = calm slow breath (fewest repaints), spin/comet/sweep = per-tick motion, none = static.",
       tile_fill: "Fill the tile with the agent status color: none = text and bar only, tint = dimmed shade, solid = full color.",
+      project_icon_fallback: "Project without a favicon: monogram = coloured first letter (default); agent = the agent's logo instead",
       tile_icon: "agent = agent logo; project = repo favicon (letter if none, spin → comet ring); both = logo + favicon badge",
       project_icons: "Repo name → icon file on the deck machine (PNG/ICO/SVG ≤256 KiB); overrides the repo favicon.",
       bottom_row: "Which buttons fill the bottom row in bottom_row mode; only profiles and new_agent (+ New) work for now.",
@@ -51,6 +52,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_secondary: "Second line from built-in fields or $name metadata tokens; unset = session title when available, otherwise tab then branch; empty = off.",
       language: "Language of the deck and this app: en (English) or cs (Czech). Applies after Apply.",
       collapse_idle: "Fold idle agents into one '+N' tile at the end of the overview; press it to show them (off by default; not Elgato).",
+      deck_theme: "Deck look: classic (default), signal, headline, quiet, or a theme file from themes/; unknown falls back to classic.",
     },
     theme: {
       working: "Tile color of an agent that is currently working (default green).",
@@ -121,9 +123,13 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       servers: "Which servers the profile uses; inheriting takes the parent's or base selection, empty = a profile with no servers.",
     },
     desktop: {
-      deck_always_on_top: "Keeps the floating deck window above other windows; applied immediately, no restart.",
+      floating: "What the floating window shows: dock (a narrow strip of agents that need you; default) or deck (the hardware mirror).",
+      deck_always_on_top: "Keeps the floating window above other windows; default on for the dock, off for the deck; applied immediately.",
+      dock_show: "Who gets a dock item: active (all but idle; default), all (idle too), needs_you (blocked + done); the rest fold into +N.",
+      dock_group: "Folds 2+ agents of one project (repo, else workspace) into one dock item that expands on hover; blocked never fold; default on.",
+      dock_autohide: "Slides the dock off a screen edge it is snapped to, leaving a thin sliver; stays out while an agent is blocked; default off.",
       toggle_deck: "Global shortcut to show/hide the deck; default Cmd/Ctrl+Shift+D, empty field = disabled.",
-      next_blocked: "Global shortcut that shows the deck and opens the longest-blocked agent (again = next one); empty = off (default).",
+      next_blocked: "Global shortcut (e.g. Alt+Cmd+H) to the longest-blocked agent: dock card with keys 1–9/Tab/T/Esc, or deck drill; empty = off.",
       restart_deck: "Global shortcut that closes and reopens the D200 and redraws it (like the tray's Restart deck); empty = off (default).",
     },
     telegram_bridge: {
@@ -180,6 +186,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       show_profile_on_panel: "Ukáže název aktivního profilu na stavovém panelu; zatím se při vykreslování nepoužívá.",
       working_animation: "Animace pracující dlaždice: pulse = klidný pomalý tep (nejméně překreslení), spin/comet/sweep = pohyb každý tick, none = staticky.",
       tile_fill: "Vyplnění dlaždice barvou stavu agenta: none = jen text a proužek, tint = ztmavený odstín, solid = plná barva.",
+      project_icon_fallback: "Projekt bez favicony: monogram = barevné počáteční písmeno (výchozí); agent = místo něj logo agenta",
       tile_icon: "agent = logo agenta; project = favicon repa (bez něj písmeno, spin → comet kruh); both = logo + odznak projektu",
       project_icons: "Název repa → ikona na stroji s deckem (PNG/ICO/SVG ≤256 KiB); přebije favicon z repa.",
       bottom_row: "Která tlačítka obsadí spodní řadu v režimu bottom_row; nyní fungují jen profiles a new_agent (+ New).",
@@ -188,6 +195,7 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       tile_secondary: "Druhý řádek z polí nebo tokenů $name; nevyplněno = název session, pokud existuje, jinak tab a branch; prázdné = vypnuto.",
       language: "Jazyk decku i této aplikace: en (angličtina) nebo cs (čeština). Projeví se po Použít.",
       collapse_idle: "Sbalí nečinné agenty do jedné dlaždice „+N“ na konci přehledu; stiskem se ukážou (výchozí vypnuto; ne Elgato).",
+      deck_theme: "Vzhled decku: classic (výchozí), signal, headline, quiet nebo motiv ze složky themes/; neznámý = classic.",
     },
     theme: {
       working: "Barva dlaždice agenta, který právě pracuje (výchozí green).",
@@ -258,9 +266,13 @@ export const FIELD_HELP: Record<Lang, Record<string, SectionHelp>> = {
       servers: "Které servery profil používá; při dědění přebírá výběr rodiče či báze, prázdný výběr = profil bez serverů.",
     },
     desktop: {
-      deck_always_on_top: "Drží plovoucí okno decku nad ostatními okny; použije se hned, bez restartu.",
+      floating: "Co ukazuje plovoucí okno: dock (úzký pruh agentů, kteří tě potřebují; výchozí) nebo deck (zrcadlo hardwaru).",
+      deck_always_on_top: "Drží plovoucí okno nad ostatními okny; výchozí zapnuto pro dock, vypnuto pro deck; použije se hned.",
+      dock_show: "Kdo má v docku vlastní položku: active (kromě nečinných; výchozí), all (i nečinní), needs_you (blokovaní + hotoví); zbytek ve +N.",
+      dock_group: "Sloučí 2+ agenty jednoho projektu (repo, jinak workspace) do jedné položky, která se rozbalí najetím; blokovaní nikdy; výchozí zapnuto.",
+      dock_autohide: "Schová dock přichycený k okraji obrazovky, zůstane jen tenký proužek; vysune se, když je agent blokovaný; výchozí vypnuto.",
       toggle_deck: "Globální zkratka pro zobrazení/skrytí decku; výchozí Cmd/Ctrl+Shift+D, prázdné pole = vypnuto.",
-      next_blocked: "Globální zkratka: ukáže deck a otevře nejdéle blokovaného agenta (znovu = další); prázdné = vypnuto (výchozí).",
+      next_blocked: "Zkratka (např. Alt+Cmd+H) na nejdéle blokovaného agenta: karta docku s klávesami 1–9/Tab/T/Esc, či drill decku; prázdné = vyp.",
       restart_deck: "Globální zkratka, která zavře a znovu otevře D200 a překreslí ho (jako Restartovat deck v tray); prázdné = vypnuto (výchozí).",
     },
     telegram_bridge: {

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from . import layout
 from .commands import Command, profile_for
 from .config import Config
-from .driver.base import PanelView, TileView
+from .driver.base import PanelAgent, PanelView, TileView
 from .i18n import tr
 from .model import AgentKey, AgentState, Status
 from .project_icons import ProjectIconStore
@@ -486,6 +486,7 @@ class Orchestrator:
             headline=reason,
             solid=True,
             hint=self._tr("panel.recovers"),
+            kind="config_error",
         )
         return RenderState(tiles, panel)
 
@@ -893,6 +894,13 @@ class Orchestrator:
         return layout.Spotlight(oldest.label, self._elapsed_text(oldest.key), detail, others)
 
     def render(self) -> RenderState:
+        """The deck's tiles + panel, stamped with the deck theme (the one
+        render exit every view passes; layout.stamp_theme)."""
+        rs = self._render_view()
+        layout.stamp_theme(self.config, rs.tiles, rs.panel)
+        return rs
+
+    def _render_view(self) -> RenderState:
         if self._config_error is not None:
             return self._render_config_error()
         if self._profile_menu:
@@ -928,6 +936,7 @@ class Orchestrator:
                         self._management_label(management[i]),
                         "grey",
                         section=_MGMT_SECTION.get(management[i]),
+                        kind="menu",
                     )
                 )
             elif not management_mode and i == self.slots - 1:  # reserved launcher tile
@@ -946,6 +955,7 @@ class Orchestrator:
                             "grey",
                             subtext=self._tr("idle_group_hide_sub"),
                             section="view",
+                            kind="idle_group",
                         )
                     )
                 else:
@@ -956,6 +966,7 @@ class Orchestrator:
                             "grey",
                             subtext=self._tr("idle_group_show"),
                             section="view",
+                            kind="idle_group",
                         )
                     )
             elif i < len(shown) and shown[i] is not None:
@@ -1007,12 +1018,17 @@ class Orchestrator:
                         server_accent=accent,
                         section="view",
                         project_icons=self._project_icons,
+                        down=down,
                     )
                 )
             elif (self._page % pages) * agent_slots + i in self.pins:
                 key = self.pins[(self._page % pages) * agent_slots + i]
                 label = "pinned_absent" if key.server_id in self._down else "pinned_missing"
-                tiles.append(TileView(i, self._tr(label), "grey", subtext=self._tr("unpin")))
+                tiles.append(
+                    TileView(
+                        i, self._tr(label), "grey", subtext=self._tr("unpin"), kind="pinned_hole"
+                    )
+                )
             else:
                 tiles.append(TileView(i, "", "empty"))
         spotlight = self._blocked_spotlight()
@@ -1041,6 +1057,8 @@ class Orchestrator:
                 hint=self._tr(
                     "panel.press_more" if page + 1 < detail_pages else "panel.press_close"
                 ),
+                kind="usage",
+                counts=asdict(layout.summary(self._agents.values(), self._down)),
             )
             return RenderState(tiles, panel)
         sent = ""
@@ -1054,7 +1072,7 @@ class Orchestrator:
                 self._sent_note = None
         all_down = self._all_down()
         panel = layout.panel_overview(
-            layout.summary(self._agents.values()),
+            layout.summary(self._agents.values(), self._down),
             self._page % pages,
             pages,
             # A full outage shows OFFLINE whatever connected before; in a
@@ -1076,9 +1094,20 @@ class Orchestrator:
             sent=sent,
             down_for=self._down_for() if all_down else "",
             left=len(self._triage_queue()) if sent else None,
+            queue=self._panel_queue(),
             names={s.id: s.label for s in self.config.servers if s.label},
         )
         return RenderState(tiles, panel)
+
+    def _panel_queue(self) -> list[PanelAgent]:
+        """The blocked queue (longest-waiting first) as panel entries for deck
+        themes — the same order the spotlight and a spotlight press use."""
+        return [
+            layout.panel_agent(
+                self._agents[key], self._elapsed_text(key), self.config.view, self._project_icons
+            )
+            for key in self._blocked_queue()
+        ]
 
     def _render_profile_menu(self) -> RenderState:
         names = list(self.config.meta.profile_names)
@@ -1088,7 +1117,9 @@ class Orchestrator:
             if i < len(names) and i < back_i:
                 name = names[i]
                 label = f"* {name}" if name == self.config.meta.active_profile else name
-                tiles.append(TileView(i, label[:_OPTION_LABEL_MAX], "blue", section="profiles"))
+                tiles.append(
+                    TileView(i, label[:_OPTION_LABEL_MAX], "blue", section="profiles", kind="menu")
+                )
             elif i == back_i:
                 tiles.append(TileView(i, self._tr("back"), "grey"))
             else:
@@ -1098,7 +1129,9 @@ class Orchestrator:
             if self.config.meta.env_locked_profile
             else self._tr("pick_profile")
         )
-        return RenderState(tiles, PanelView(self._tr("profiles_title"), headline=locked))
+        return RenderState(
+            tiles, PanelView(self._tr("profiles_title"), headline=locked, kind="menu")
+        )
 
     def _render_launcher(self) -> RenderState:
         start_profiles = self._launch_start_profiles()
@@ -1120,6 +1153,7 @@ class Orchestrator:
                         "blue",
                         agent_type=agent_type,
                         section=("start_profiles" if agent_type else "profiles"),
+                        kind="menu",
                     )
                 )
             elif i == back_i:
@@ -1132,7 +1166,9 @@ class Orchestrator:
             # With several servers the new agent's destination is not obvious:
             # say where it will start instead of silently using the first one.
             lines.append(self._tr("launch_on", server=self.server_display_name(target)))
-        panel = PanelView(self._tr("new_agent_title"), lines, headline=self._tr("pick_type"))
+        panel = PanelView(
+            self._tr("new_agent_title"), lines, headline=self._tr("pick_type"), kind="menu"
+        )
         return RenderState(tiles, panel)
 
     def _launch_server(self) -> str | None:
@@ -1349,6 +1385,7 @@ class Orchestrator:
                         color,
                         subtext=actions[i].get("subtext"),
                         section="answer_profiles",
+                        kind="option",
                     )
                 )
             elif i == stop_i - 1 and agent is not None:
@@ -1375,12 +1412,14 @@ class Orchestrator:
             if agent is not None
             else PanelView("")
         )
+        panel.kind = "detail"
         if down:
             panel = PanelView(
                 self._tr("offline_title"),
                 color=self.config.theme.colors.get("offline", "red"),
                 headline=self._tr("reconnecting"),
                 meta=panel.meta,
+                kind="offline",
             )
         elif armed is not None and agent is not None:
             panel.title = self._tr("press_to_confirm")

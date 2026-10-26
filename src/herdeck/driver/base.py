@@ -23,6 +23,43 @@ COLORS: dict[str, tuple[int, int, int]] = {
 }
 
 
+# What a key is, for themes (icons.compose dispatches on ``repo`` instead:
+# a tile with ``repo`` set is drawn by ``Theme.agent_tile``, any other by
+# ``Theme.key_tile``). "" on construction = derived in TileView.__post_init__.
+TILE_KINDS: tuple[str, ...] = (
+    "agent",
+    "option",
+    "control",
+    "launcher",
+    "empty",
+    "idle_group",
+    "pinned_hole",
+    "menu",
+)
+PANEL_KINDS: tuple[str, ...] = (
+    "calm",
+    "spotlight",
+    "offline",
+    "config_error",
+    "detail",
+    "usage",
+    "menu",
+    "sent",
+)
+
+
+@dataclass(frozen=True)
+class ThemeEnv:
+    """What a deck theme needs from the config besides the view itself: the
+    rendered language and the ``[theme.colors]`` map (status -> colour name),
+    as sorted pairs so the value is hashable and part of cache keys. Stamped
+    with ``deck_theme`` by ``layout.stamp_theme``."""
+
+    language: str = "en"
+    colors: tuple[tuple[str, str], ...] = ()
+    project_icon_fallback: str = "monogram"
+
+
 @dataclass
 class TileView:
     index: int
@@ -51,6 +88,27 @@ class TileView:
     server_accent: str | None = None
     section: str | None = None  # config section a click jumps to (klik-to-jump); None = no jump
     subagents: int = 0  # running subagents: > 0 draws the fork badge (agent tiles only)
+    # --- deck themes (themes/api.py). Stamped at the render exits
+    # (Orchestrator.render, ElgatoSession.render_all) via layout.stamp_theme.
+    deck_theme: str = "classic"
+    theme_env: ThemeEnv = field(default_factory=ThemeEnv)
+    # Status value ("working", "blocked", ...) or "offline" on agent tiles, set
+    # by layout.agent_tile_view; never inferred from the (configurable) colour.
+    status: str | None = None
+    kind: str = ""  # one of TILE_KINDS; "" = derived in __post_init__
+    title: str = ""  # herdr task title (agent tiles)
+    workspace: str = ""  # herdr workspace label (agent tiles)
+
+    def __post_init__(self) -> None:
+        if not self.kind:
+            if self.repo is not None:
+                self.kind = "agent"
+            elif self.color == "empty":
+                self.kind = "empty"
+            elif self.color == "launcher":
+                self.kind = "launcher"
+            else:
+                self.kind = "control"
 
 
 @dataclass
@@ -71,6 +129,18 @@ class PanelStat:
     label: str
     value: int
     color: str
+
+
+@dataclass
+class PanelAgent:
+    """One blocked agent in PanelView.queue (longest-waiting first)."""
+
+    label: str
+    title: str = ""
+    elapsed: str = ""
+    agent_type: str = ""
+    project_icon: str | None = None  # favicon content hash; None = monogram
+    project_name: str = ""  # monogram seed / project_icons key
 
 
 @dataclass
@@ -102,9 +172,16 @@ class PanelView:
     solid: bool = False  # fill the whole panel with ``color`` (needs you, offline)
     chip_dot: str = ""  # a status dot inside a neutral chip ("All clear" -> green)
     sent: str = ""  # replaces the chip with a check mark + this text
+    # --- deck themes (themes/api.py); stamped by layout.stamp_theme.
+    deck_theme: str = "classic"
+    theme_env: ThemeEnv = field(default_factory=ThemeEnv)
+    theme_rev: str = ""  # registry fingerprint of a non-classic theme (user file edits)
+    kind: str = "calm"  # one of PANEL_KINDS
+    queue: list[PanelAgent] = field(default_factory=list)  # blocked agents, longest first
+    counts: dict[str, int] = field(default_factory=dict)  # overview panels; incl. "offline"
 
     def cache_key(self) -> tuple:
-        return (
+        key = (
             self.title,
             tuple(self.lines),
             self.color,
@@ -122,6 +199,21 @@ class PanelView:
             self.solid,
             self.chip_dot,
             self.sent,
+        )
+        if self.deck_theme == "classic":
+            # classic draws none of the theme fields: its key (and the D200's
+            # panel file name, sha1(TILE_VERSION|repr(key))) stays as it was
+            return key
+        return key + (
+            self.deck_theme,
+            self.theme_rev,
+            self.theme_env,
+            self.kind,
+            tuple(
+                (a.label, a.title, a.elapsed, a.agent_type, a.project_icon, a.project_name)
+                for a in self.queue
+            ),
+            tuple(sorted(self.counts.items())),
         )
 
 

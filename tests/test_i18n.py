@@ -41,3 +41,10 @@ def test_partial_outage_note_strings():
     assert tr("en", "servers_offline", n=2) == "2 servers offline"
     assert tr("cs", "server_offline", name="t3") == "t3 offline"
     assert tr("cs", "servers_offline", n=2) == "servery offline: 2"
+
+
+def test_signal_theme_strings():
+    assert tr("en", "signal.waiting_for", t="4m") == "4m waiting"
+    assert tr("cs", "signal.waiting_for", t="4m") == "čeká 4m"
+    assert tr("en", "signal.n_waiting", n=2) == "2 waiting"
+    assert tr("cs", "signal.n_waiting", n=2) == "čeká: 2"

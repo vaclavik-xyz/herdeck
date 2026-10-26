@@ -1073,6 +1073,63 @@ the card or hide the window, and the runtime stops any preview nobody has
 polled for 15 s. The runtime runs at most two previews at once (the bridge
 allows three per connection) and drops the oldest when you open another.
 
+**Mini dock.** By default the floating window is the *mini dock*: a narrow,
+always-on-top strip with one favicon (or monogram) per agent that is not idle,
+inside a status ring: blocked (amber, pulsing, longest-waiting first), waiting
+(dashed), done (ring and dot), working (open arc). Idle agents fold into one
+**+N** chip, and an agent whose server is offline is greyed and struck
+through. Hover an agent (or focus it with Tab) and a card opens beside the
+strip with the task title, repo · branch and how long it has been in its
+status. For a blocked agent the card shows the prompt and one button per
+numbered option, coloured like the deck: approve green, approve-always amber,
+deny red, anything else blue. Options that `[safety].require_confirm_for`
+covers ask for a second click. **Open in herdr** focuses the pane. Click an
+agent to keep its card open until Esc or a click elsewhere. Drag the strip by
+its grip; it remembers where you left it and opens cards toward the side of
+the screen with more room. Answers go through the same guarded `/agent/*`
+routes as the agent card, so if the prompt changed while you read it the
+answer is refused as stale and the new prompt is shown. Set
+`[desktop].floating = "deck"` (Settings → Window → `floating`) to get the
+mirror of the hardware deck back. `deck_always_on_top` defaults to on for the
+dock and off for the deck mirror. The dock reads the runtime's token-gated
+`GET /agent/list` (long-polled; it wakes only when an agent changes, not for
+animation frames) and `GET /project-icon/<hash>` (the favicon as a 96 px PNG).
+A project without a favicon shows its monogram; `GET /agent-mark/<type>` (a
+96 px PNG) serves the agent's logo instead when
+`[view].project_icon_fallback = "agent"`.
+
+Who gets an item of their own follows `[desktop].dock_show`: `"active"` (the
+default: every agent that is not idle), `"all"` (idle agents too, after the
+rest) or `"needs_you"` (only blocked and done agents; everything else folds
+into **+N**, whose card then lists the other agents most urgent first). With
+`[desktop].dock_group = true` (the default) two or more agents of one project
+(same repo, else same workspace) fold into one item: the project's mark in a
+ring of its most urgent member (waiting, then done, then working) with a count
+badge. Hover or focus it and the members slide out under it, each a normal
+item with its own card; it folds back 400 ms after the pointer leaves (or on
+Esc), and stays open while one of its members' cards is open. A blocked agent
+never folds into a group: it always stands alone at the top. All three keys
+are in Settings → Window and apply live after Apply.
+
+Drop the strip within 24 px of the left or right edge of the screen's work
+area and it snaps flush to that edge once the drag ends (on macOS only after
+the mouse button is up, so a pause mid-drag never snaps). With
+`[desktop].dock_autohide = true` a snapped strip slides out 1.2 s after the
+pointer leaves it, leaving a 6 px sliver at the edge in the most urgent
+status's colour; rest the pointer on the sliver and it slides back in. It
+stays out while a card or group is open, while the dock has keyboard focus
+and while any agent is blocked. A strip that is not snapped never hides. A
+group expanded near the bottom of the screen lifts the strip just enough to
+stay on screen, and it drops back when the group folds.
+
+An agent card also shows the agent's live output: the last eight lines of its
+pane as plain text, updated as it works (it needs a bridge with the
+`terminal_preview` capability; elsewhere the box is simply absent). Fold it
+away with its **Output** header; the dock remembers that per viewer. When the
+agent accepts free text, a reply field sits under the options: Enter sends it
+(`POST /agent/text`, at most 4000 characters), Shift+Enter adds a line, and the
+field clears once the bridge has it (a refused reply keeps your text).
+
 **Maintenance** (Settings → System → Maintenance) does from the app what used
 to need a terminal: it lists the app, runtime and bridge versions (a mismatch
 is flagged), says where the runtime comes from and can make it a service of
@@ -1149,7 +1206,11 @@ blocked agent, and back to the overview when none is left. **Back** leaves the
 loop at any time. While the spotlight is up the status window starts triage
 instead of paging. In the desktop app, `[hotkeys].next_blocked` (for example
 `"CmdOrCtrl+Shift+B"`, off by default) is a global shortcut that shows the deck
-and does the same; pressing it again skips to the next blocked agent. State is encoded by color: working = green,
+and does the same; pressing it again skips to the next blocked agent. With the
+mini dock as the floating window it instead focuses the dock and opens the
+blocked agent's card: `1`–`9` answers, `Tab` moves to the next blocked agent,
+`T` replies, `O` opens it in herdr and `Esc` closes — and the focus returns to
+the app you were in. State is encoded by color: working = green,
 idle = blue, blocked = amber, done = cyan, waiting = violet, error/disconnected
 = red. **Waiting** is derived from a pane held by
 [herdwatch](https://github.com/vaclavik-xyz/herdwatch) (or any source using
@@ -1167,7 +1228,8 @@ working animation draws as a `comet` ring around it. The bridge finds the
 favicon in the pane's repository
 (`favicon.png`, `public/favicon.png`, `app/icon.png`, … then `.ico`, then
 `.svg`; at most 256 KiB) and sends it to the deck once; a project without one
-gets a coloured letter badge. When the pane's working directory is not inside
+gets a coloured letter badge (set `[view].project_icon_fallback = "agent"` to show the
+agent's logo instead). When the pane's working directory is not inside
 a Git repository (say a workspace folder holding several repos), the bridge
 looks in that folder itself, so you can drop a `favicon.png` there, and
 otherwise in its direct child repositories in name order, but only when the
@@ -1184,6 +1246,20 @@ T3, else T3's own discovery in the project folder), same limits; their
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
+
+The whole look is switchable as well: `[view].deck_theme` (editor: **Deck
+look**) picks a deck theme, `classic` (today's look) by default. Built-in looks:
+`classic` (default, the original look), `signal` (the project's favicon and the
+task title on a dark key; status shown by colour and by the frame's shape),
+`headline` (big project name and time on the status colour) and `quiet` (only
+an agent that needs you is loud). A theme only changes how keys and the
+status window are drawn; your status colours, agent order and presses stay the
+same. You can write your own theme as one Python file in
+`~/.config/herdeck/themes/` (next to your `config.toml`) and select it by its
+file name; see [docs/themes.md](docs/themes.md). A theme is code and runs with
+your user
+privileges, so only install themes you have read.
+
 With many agents, set `[view].collapse_idle = true` to fold every idle agent
 into one `+N` tile at the end of the overview. Pressing it unfolds the idle
 agents (the deck jumps to the page with the first one) and a `hide` tile at the

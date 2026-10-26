@@ -9,6 +9,7 @@ from herdeck.driver.base import TileView as _TileView
 from herdeck.icons import IconProvider
 from herdeck.project_icon_discovery import icon_hash
 from herdeck.project_icons import ProjectIconStore, default_store
+from herdeck.themes.classic import draw_subagent_badge
 
 
 def _fake_fetch(slug):  # pretend Simple Icons returns an SVG for known slugs
@@ -1457,9 +1458,9 @@ def test_subagent_badge_draws_only_when_running(tmp_path):
 def test_subagent_badge_caps_the_count_and_shortens_the_tag(tmp_path):
     p = make_provider(tmp_path)
     d = ImageDraw.Draw(Image.new("RGB", (196, 196)))
-    assert IconProvider._draw_subagent_badge(d, 0, 184, (255, 255, 255)) == 0
-    two = IconProvider._draw_subagent_badge(d, 12, 184, (255, 255, 255))
-    capped = IconProvider._draw_subagent_badge(d, 250, 184, (255, 255, 255))
+    assert draw_subagent_badge(d, 0, 184, (255, 255, 255)) == 0
+    two = draw_subagent_badge(d, 12, 184, (255, 255, 255))
+    capped = draw_subagent_badge(d, 250, 184, (255, 255, 255))
     assert 0 < two < capped < 80
     # a long backend tag is truncated to leave the badge room
     tagged = _pixels(p, _subagent_tile(250, server_tag="W" * 40, pinned=True))

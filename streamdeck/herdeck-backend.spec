@@ -4,6 +4,8 @@
 #     --distpath …/xyz.vaclavik.herdeck.sdPlugin/backend --workpath build/pyinstaller
 import os
 
+from PyInstaller.utils.hooks import collect_submodules
+
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))  # repo root (SPECPATH = streamdeck/)
 
 a = Analysis(
@@ -20,6 +22,9 @@ a = Analysis(
     # that import, but is listed here as a safety net. Add more ONLY if the manual smoke run
     # shows PyInstaller missed a real serve_elgato-graph import.
     hiddenimports=[
+        # Built-in deck themes are imported by NAME (themes/registry.py
+        # BUILTIN_MODULES): bundle every herdeck.themes submodule.
+        *collect_submodules("herdeck.themes"),
         "herdeck.elgato.runtime",
         "resvg_py",  # project SVG favicons (imported lazily)
         "herdeck.elgato.frozen",

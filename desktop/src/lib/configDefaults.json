@@ -22,9 +22,11 @@
     "working_animation": "spin",
     "tile_fill": "none",
     "tile_icon": "agent",
+    "project_icon_fallback": "monogram",
     "project_icons": {},
     "language": "en",
-    "collapse_idle": false
+    "collapse_idle": false,
+    "deck_theme": "classic"
   },
   "safety": {
     "approve_always": true,
@@ -40,6 +42,12 @@
     "alert_at": [],
     "alert_reset": false,
     "source": "auto"
+  },
+  "desktop": {
+    "floating": "dock",
+    "dock_group": true,
+    "dock_show": "active",
+    "dock_autohide": false
   },
   "hardware": {
     "brightness": 80,
