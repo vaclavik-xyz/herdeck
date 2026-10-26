@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 from PIL import Image, ImageChops, ImageDraw, ImageStat
 
-from .driver.base import COLORS, PanelView
+from .driver.base import COLORS, PanelView, time_line
 from .project_icons import NO_PROJECT_ICON, ProjectIconStore, StoredIcon, default_store
 
 log = logging.getLogger(__name__)
@@ -1432,6 +1432,7 @@ class IconProvider:
             tile.branch,
             tile.status_text,
             tile.time_text,
+            getattr(tile, "wait_reason", ""),
             getattr(tile, "tile_fill", "none"),
         ]
         mode = getattr(tile, "tile_icon", "agent")
@@ -1634,9 +1635,10 @@ class IconProvider:
             fs = _fit_font(d, tile.status_text, STATUS_MAX_W, 24, 17)
             word = _truncate(d, tile.status_text, fs, STATUS_MAX_W)
             d.text((right - d.textlength(word, font=fs), 10), word, font=fs, fill=word_fill)
-        if tile.time_text:
-            ft = _fit_font(d, tile.time_text, STATUS_MAX_W, 20, 16)
-            t = _truncate(d, tile.time_text, ft, STATUS_MAX_W)
+        line = time_line(getattr(tile, "wait_reason", ""), tile.time_text)
+        if line:
+            ft = _fit_font(d, line, STATUS_MAX_W, 20, 16)
+            t = _truncate(d, line, ft, STATUS_MAX_W)
             d.text((right - d.textlength(t, font=ft), 40), t, font=ft, fill=time_fill)
         # repo (primary) + branch (secondary) — spread down the tile so the
         # composition is optically centred between the logo row and the bottom

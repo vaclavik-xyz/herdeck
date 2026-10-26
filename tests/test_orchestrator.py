@@ -378,6 +378,18 @@ def test_tile_fields_can_hide_branch_status_time_and_server_tag():
     assert tile.server_tag is None
 
 
+def test_hidden_time_field_hides_the_waiting_reason_too():
+    cfg = make_config()
+    cfg.view.tile_fields = ["repo", "status"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WAITING,
+                                        waiting_on="⏳ ci")])
+
+    tile = _tile_for(o)
+
+    assert (tile.status_text, tile.time_text, tile.wait_reason) == ("WAITING", None, "")
+
+
 def test_overview_renders_configured_tile_lines():
     cfg = make_config()
     cfg.view.tile_primary = ["workspace"]
@@ -709,7 +721,8 @@ def test_agent_tile_waiting_on_beats_the_state_label():
         ],
     )
 
-    assert _tile_for(o).status_text == "CI"
+    assert _tile_for(o).status_text == "WAITING"
+    assert _tile_for(o).wait_reason == "CI"
 
 
 def test_offline_agent_tile_beats_the_state_label():
@@ -750,7 +763,8 @@ def test_waiting_agent_renders_violet_with_holder_label():
     tiles = {t.label: t for t in rs.tiles if t.label}
     waiting = tiles["api"]
     assert waiting.color == "violet"
-    assert waiting.status_text == "CI"  # the holder's label, not a generic word
+    assert waiting.status_text == "WAITING"
+    assert waiting.wait_reason == "CI"  # the holder's label, drawn under the word
     assert waiting.spinner is None  # waiting tiles do not animate
     working = [t for t in rs.tiles if t.color == "green"]
     assert working and rs.tiles.index(working[0]) < rs.tiles.index(waiting)  # working sorts first

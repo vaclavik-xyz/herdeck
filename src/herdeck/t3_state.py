@@ -47,7 +47,7 @@ def wait_label(tasks):
     if any(t.get("kind") == "command" and _ci_wait_text(t.get("description") or "") for t in tasks):
         return "CI"
     kind = (tasks[0].get("kind") if tasks else "") or ""
-    return _TASK_LABELS.get(kind, "WAITING")
+    return _TASK_LABELS.get(kind, "")
 
 
 def timestamp(value):

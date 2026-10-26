@@ -42,6 +42,10 @@ class TileView:
     branch: str | None = None
     status_text: str | None = None  # WORKING / IDLE / BLOCKED / DONE
     time_text: str | None = None  # elapsed in current status, e.g. "3m"
+    # Why a WAITING agent waits ("CI", "SUB"), drawn before the elapsed time.
+    # A field of its own, not part of time_text: the D200 sink treats
+    # time_text as volatile, so a reason change must not hide inside it.
+    wait_reason: str = ""
     pinned: bool = False
     server_tag: str | None = None
     server_accent: str | None = None
@@ -136,3 +140,10 @@ class DeckDriver(ABC):
 
     @abstractmethod
     def close(self) -> None: ...
+
+
+def time_line(reason: str | None, elapsed: str | None) -> str:
+    """The line under a tile's status word: the waiting reason, then the
+    elapsed time ("CI · 4m"). The status word itself stays WAITING so a
+    waiting agent always reads as waiting, whatever holds it."""
+    return " · ".join(part for part in (reason, elapsed) if part)
