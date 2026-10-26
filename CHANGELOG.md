@@ -6,6 +6,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-26
+
+### Added
+- A T3 thread whose finished run left a background command waiting on an open
+  linked PR's checks (`gh pr checks --watch`, "Wait for PR 649 checks") shows
+  as WAITING · CI instead of done, the way herdwatch holds a herdr pane.
+
+### Changed
+- A waiting tile always says WAITING (cs: V POZADÍ); why it waits moves to the
+  line under it, before the elapsed time: `CI · 4m`, `SUB · 12m`. T3 reasons
+  are shortened to fit (SUBAGENT → SUB, COMMAND → CMD, MONITOR → MON,
+  BACKGROUND → BG), the drill panel title shows the same text, and the reason
+  hides along with the `time` tile field.
+- Notification titles use display names (`Claude · done`, not
+  `claudeAgent · done`) for herdr and T3 alike. A T3 alert's body leads with
+  the project title (a project-less thread with its own title) instead of the
+  workspace path and no longer ends in the raw server id.
+
+### Fixed
+- T3 threads the agent waits on (`t3_background_wait`, `awaited: true`) showed
+  as done on the deck while T3 itself showed them as Waiting. Herdeck now
+  follows T3's rule: an awaited task holds a finished run; an unawaited
+  command or monitor does not; subagents and background tasks do.
+
 ## [0.17.0] - 2026-10-23
 
 ### Added
