@@ -1000,6 +1000,8 @@ class Orchestrator:
                         if "status" in fields
                         else None,
                         time_text=self._elapsed_text(s.key) if "time" in fields else None,
+                        # the reason shares the time line, so it hides with it
+                        show_wait_reason="time" in fields,
                         pinned=s.key in self.pins.values(),
                         server_tag=tag,
                         server_accent=accent,

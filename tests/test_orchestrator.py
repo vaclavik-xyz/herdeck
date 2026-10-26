@@ -378,6 +378,18 @@ def test_tile_fields_can_hide_branch_status_time_and_server_tag():
     assert tile.server_tag is None
 
 
+def test_hidden_time_field_hides_the_waiting_reason_too():
+    cfg = make_config()
+    cfg.view.tile_fields = ["repo", "status"]
+    o = Orchestrator(cfg, slots=13)
+    o.apply_snapshot("dev", [AgentState(AgentKey("dev", "p1"), "claude", "api", Status.WAITING,
+                                        waiting_on="⏳ ci")])
+
+    tile = _tile_for(o)
+
+    assert (tile.status_text, tile.time_text, tile.wait_reason) == ("WAITING", None, "")
+
+
 def test_overview_renders_configured_tile_lines():
     cfg = make_config()
     cfg.view.tile_primary = ["workspace"]
