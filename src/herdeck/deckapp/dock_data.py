@@ -14,7 +14,7 @@ import logging
 import re
 from collections.abc import Iterable, Mapping
 
-from ..model import AgentKey, AgentState
+from ..model import AgentKey, AgentState, Status
 from ..project_icons import ProjectIconStore, default_store
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,20 @@ def _icon_name(agent: AgentState) -> str:
     return agent.repo or agent.project or agent.label
 
 
+def row_repo(agent: AgentState) -> str:
+    """The repo the dock shows and groups by. A project-less T3 thread's repo
+    is T3's scratch dir: show (and group under) its "No project" title."""
+    return agent.project if agent.no_project and agent.project else agent.repo
+
+
+def waiting_on(agent: AgentState) -> str:
+    """What holds a waiting agent: herdeck's `waiting_on` holder label, else
+    the backend's own waiting label (T3: CI, SUBAGENT, …)."""
+    if agent.waiting_on or agent.status is not Status.WAITING:
+        return agent.waiting_on
+    return agent.state_labels.get(Status.WAITING.value, "")
+
+
 def agent_rows(
     agents: Iterable[AgentState],
     *,
@@ -79,18 +93,19 @@ def agent_rows(
                 "server_id": agent.key.server_id,
                 "pane_id": agent.key.pane_id,
                 "agent_type": agent.agent_type,
+                "backend": agent.backend,
                 "title": row_title(agent),
-                "repo": agent.repo,
+                "repo": row_repo(agent),
                 "workspace": agent.workspace,
                 "branch": agent.branch,
                 "tab": agent.tab,
                 "status": agent.status.value,
                 "since_s": int(elapsed) if elapsed is not None else 0,
-                "waiting_on": agent.waiting_on,
+                "waiting_on": waiting_on(agent),
                 "subagents": agent.subagents_running,
                 "offline": not connections.get(agent.key.server_id, True),
                 "icon": target.resolve(name, agent.project_icon, overrides),
-                "monogram": monogram(name),
+                "monogram": monogram(row_repo(agent) or name),
             }
         )
     return rows
@@ -126,7 +141,9 @@ def list_signature(
             a.label,
             a.branch,
             a.tab,
-            a.waiting_on,
+            waiting_on(a),
+            a.backend,
+            a.no_project,
             a.subagents_running,
             a.project_icon,
             bool(a.project_icon) and a.project_icon in target,

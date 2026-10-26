@@ -241,6 +241,74 @@ describe("DockCard (agent)", () => {
   });
 });
 
+describe("DockCard (T3 thread)", () => {
+  const t3Detail = (over = {}) =>
+    agentDetail({
+      backend: "t3",
+      status: "done",
+      prompt: "All tests pass; the PR is ready.",
+      revision: "t3-rev-1",
+      options: [
+        { key: "0", label: "Mark seen", id: "acknowledge", kind: "backend", confirm: false },
+        { key: "1", label: "Snooze 1h", id: "snooze", kind: "backend", confirm: false },
+      ],
+      canFocus: false,
+      ...over,
+    });
+
+  it("offers the thread's own actions and latest text, never herdr's", async () => {
+    const transport = fakeAgentTransport({ details: [{ kind: "ok", detail: t3Detail() }] });
+    const agent = dockAgent({ status: "done", backend: "t3" });
+    const { target, onSent, cleanup } = render({ agent, transport });
+    try {
+      await vi.waitFor(() => expect(buttons(target)).toHaveLength(2));
+      expect(buttons(target).map((b) => b.textContent?.trim())).toEqual(["Mark seen", "Snooze 1h"]);
+      expect(target.querySelector(".prompt")?.textContent).toBe("All tests pass; the PR is ready.");
+      expect(target.querySelector("button.focus")).toBeNull();
+      expect(target.querySelector(".preview")).toBeNull();
+      buttons(target)[0].click();
+      await vi.waitFor(() => expect(onSent).toHaveBeenCalledTimes(1));
+      expect(transport.actCalls[0]).toMatchObject({
+        action: "answer",
+        ref: { serverId: "prod", paneId: "p0" },
+        extra: { key: "0", revision: "t3-rev-1" },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not open a terminal preview for a T3 thread", async () => {
+    const transport = fakeAgentTransport({ details: [{ kind: "ok", detail: t3Detail({ status: "working" }) }] });
+    const termOpen = vi.spyOn(transport, "termOpen");
+    const { target, cleanup } = render({ agent: dockAgent({ status: "working", backend: "t3" }), transport });
+    try {
+      await vi.waitFor(() => expect(target.querySelector(".prompt")).not.toBeNull());
+      expect(termOpen).not.toHaveBeenCalled();
+      expect(target.querySelector(".preview")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("lists an idle T3 thread as a plain row, not an Open in herdr button", async () => {
+    const transport = fakeAgentTransport();
+    const idle = [
+      dockAgent({ paneId: "h1", title: "Pane", status: "idle" }),
+      dockAgent({ paneId: "t1", title: "Thread", status: "idle", backend: "t3" }),
+    ];
+    const { target, cleanup } = render({ idle, transport });
+    try {
+      const rows = Array.from(target.querySelectorAll<HTMLElement>(".row"));
+      expect(rows.map((r) => r.tagName)).toEqual(["BUTTON", "DIV"]);
+      rows[1].click();
+      expect(transport.actCalls).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe("DockCard (idle list)", () => {
   it("lists idle agents and focuses the one clicked", async () => {
     const transport = fakeAgentTransport({ outcomes: [{ ok: true, code: "focused", message: "" }] });

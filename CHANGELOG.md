@@ -69,6 +69,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slides the strip back. A card, an expanded group, keyboard focus or any
   blocked agent keeps it out. `dock_layout` takes `sliverWidth` and reports
   the snapped `edge`; Rust emits `dock-moved` after a drop.
+- Mini dock with T3 threads: a thread's card shows its latest text and its own
+  actions in any status (approve/deny, Mark seen, Snooze, Settle…) instead of
+  the herdr-only output tail and Open in herdr; an idle thread in the `+N`
+  list is a plain row, not a herdr focus button. `/agent/list` rows carry
+  `backend`, a T3 waiting label (CI, SUBAGENT) as `waiting_on`, and a
+  project-less thread's "No project" title as its repo.
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)

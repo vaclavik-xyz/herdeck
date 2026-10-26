@@ -68,6 +68,7 @@ def test_rows_carry_every_field_and_skip_inactive_agents():
             "server_id": "prod",
             "pane_id": "p0",
             "agent_type": "claude",
+            "backend": "herdr",
             "title": "Česká bankovní API",
             "repo": "macdoktor-crm",
             "workspace": "macDoktor CRM",
@@ -118,6 +119,31 @@ def test_rows_resolve_the_icon_like_tiles_do(tmp_path):
     assert rows[2]["icon"] == icon_hash(override.read_bytes())  # override wins
 
 
+def test_rows_name_a_t3_thread_and_its_wait_reason():
+    thread = _agent(
+        "t1",
+        Status.WAITING,
+        repo="/Users/me/.t3/scratch",
+        project="No project",
+        no_project=True,
+        backend="t3",
+        state_labels={"waiting": "CI"},
+    )
+    held = _agent("p1", Status.WAITING, repo="shop", waiting_on="REVIEW", state_labels={"waiting": "CI"})
+    rows = agent_rows([thread, held], since={}, connections={}, overrides={}, store=ProjectIconStore())
+    # the scratch dir is not a project: the row shows (and groups under) T3's
+    # "No project" title, and its monogram is not the path's "U"
+    assert (rows[0]["backend"], rows[0]["repo"], rows[0]["monogram"]) == ("t3", "No project", "N")
+    assert rows[0]["waiting_on"] == "CI"  # the backend's waiting label
+    assert (rows[1]["backend"], rows[1]["waiting_on"]) == ("herdr", "REVIEW")  # holder label first
+
+
+def test_rows_ignore_a_stale_waiting_label_off_waiting():
+    agent = _agent("t1", Status.WORKING, backend="t3", state_labels={"waiting": "CI"})
+    rows = agent_rows([agent], since={}, connections={}, overrides={}, store=ProjectIconStore())
+    assert rows[0]["waiting_on"] == ""
+
+
 # --- signature -----------------------------------------------------------------
 
 
@@ -130,6 +156,10 @@ def test_signature_ignores_order_and_changes_with_any_row_field():
     assert list_signature([a, _agent("b", Status.WORKING, repo="r", title="x")], {"prod": True}, "en", store) != base
     assert list_signature([a, b], {"prod": False}, "en", store) != base
     assert list_signature([a, b], {"prod": True}, "cs", store) != base
+    waiting_t3 = _agent("b", Status.WAITING, repo="r", backend="t3", state_labels={"waiting": "CI"})
+    assert list_signature([a, waiting_t3], {"prod": True}, "en", store) != list_signature(
+        [a, _agent("b", Status.WAITING, repo="r", backend="t3")], {"prod": True}, "en", store
+    )
 
 
 def test_signature_changes_when_icon_bytes_arrive():

@@ -18,6 +18,7 @@ const ROW = {
   server_id: "studio",
   pane_id: "p1",
   agent_type: "claude",
+  backend: "herdr",
   title: "Česká bankovní API",
   repo: "macdoktor-crm",
   workspace: "macDoktor CRM",
@@ -38,6 +39,7 @@ describe("parseDockAgent", () => {
       serverId: "studio",
       paneId: "p1",
       agentType: "claude",
+      backend: "herdr",
       title: "Česká bankovní API",
       repo: "macdoktor-crm",
       workspace: "macDoktor CRM",
@@ -51,6 +53,12 @@ describe("parseDockAgent", () => {
       icon: "0123456789abcdef",
       monogram: "M",
     });
+  });
+
+  it("tells a T3 thread from a herdr pane; an older runtime's row is herdr", () => {
+    expect(parseDockAgent({ ...ROW, backend: "t3" })?.backend).toBe("t3");
+    const { backend: _drop, ...old } = ROW;
+    expect(parseDockAgent(old)?.backend).toBe("herdr");
   });
 
   it("rejects malformed entries", () => {

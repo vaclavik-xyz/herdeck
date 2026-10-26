@@ -4,8 +4,10 @@
   // deck) or the folded idle agents. Every action goes through the guarded
   // /agent/* routes (agentCardClient.ts): an answer names the prompt revision
   // it was read under, and every outcome is shown — never assumed. Any agent
-  // card also carries a live output tail (DockPreview) and, when the detail
-  // allows free text, a reply field (DockReply).
+  // herdr card also carries a live output tail (DockPreview) and, when the
+  // detail allows free text, a reply field (DockReply). A T3 thread has no
+  // pane to open or observe: its card shows the thread's latest text and its
+  // own actions (Mark seen, Snooze, …) in any status instead.
   import { onMount, untrack } from "svelte";
   import DockMark from "./DockMark.svelte";
   import DockPreview from "./DockPreview.svelte";
@@ -65,7 +67,7 @@
    *  confirm, revision check). False when the prompt offers no such option. */
   export function answerKey(digit: string): boolean {
     const o = detail?.options.find((x) => x.kind === "option" && x.key === digit);
-    if (!o || !blocked || sent || busy) return false;
+    if (!o || !actionable || sent || busy) return false;
     void answer(o);
     return true;
   }
@@ -90,6 +92,10 @@
   let alive = true;
 
   const blocked = $derived(agent?.status === "blocked");
+  const t3 = $derived(agent?.backend === "t3" || detail?.backend === "t3");
+  // A T3 thread's options are its actions in any status (approve, Mark seen,
+  // Snooze…); a herdr agent's exist only on a blocked prompt.
+  const actionable = $derived(blocked || detail?.backend === "t3");
   const meta = $derived(agent ? [agent.repo, agent.branch].filter(Boolean).join(" · ") : "");
   const rowKey = (a: DockAgent) => `${a.serverId}/${a.paneId}`;
 
@@ -232,17 +238,17 @@
       {#if agent.waitingOn}<span>{fmt(m.waiting_on, { what: agent.waitingOn })}</span>{/if}
       {#if agent.subagents > 0}<span>{fmt(m.subagents, { n: agent.subagents })}</span>{/if}
     </p>
-    {#if transport}
+    {#if transport && !t3}
       <DockPreview
         {transport}
         agent={{ serverId: agent.serverId, paneId: agent.paneId }}
         plausible={detail !== null && detail.backend !== "t3" && detail.connected}
       />
     {/if}
-    {#if blocked}
+    {#if actionable}
       {#if detail?.prompt}
         <pre class="prompt" use:scrollEnd={detail.prompt}>{detail.prompt}</pre>
-      {:else if !note && (detail === null || detail.promptPending)}
+      {:else if blocked && !note && (detail === null || detail.promptPending)}
         <p class="reading">{m.reading}</p>
       {/if}
       {#if detail && detail.options.length > 0 && !sent}
@@ -280,11 +286,20 @@
     <ul class="idle">
       {#each idle as a (rowKey(a))}
         <li>
-          <button type="button" class="row" aria-label={`${a.title} · ${m.open_herdr}`} onclick={() => void focusAgent(a)}>
-            <DockMark agent={a} src={iconUrl(a)} size={20} />
-            <span class="row-title">{a.title}</span>
-            <span class="row-since">{formatSince(sinceOf(a))}</span>
-          </button>
+          {#if a.backend === "t3"}
+            <!-- A T3 thread has no herdr pane to open: a plain row. -->
+            <div class="row static">
+              <DockMark agent={a} src={iconUrl(a)} size={20} />
+              <span class="row-title">{a.title}</span>
+              <span class="row-since">{formatSince(sinceOf(a))}</span>
+            </div>
+          {:else}
+            <button type="button" class="row" aria-label={`${a.title} · ${m.open_herdr}`} onclick={() => void focusAgent(a)}>
+              <DockMark agent={a} src={iconUrl(a)} size={20} />
+              <span class="row-title">{a.title}</span>
+              <span class="row-since">{formatSince(sinceOf(a))}</span>
+            </button>
+          {/if}
           {#if rowNotes[rowKey(a)]}<p class="note">{rowNotes[rowKey(a)]}</p>{/if}
         </li>
       {/each}
@@ -432,6 +447,8 @@
     cursor: pointer;
   }
   .row:hover { background: var(--key); }
+  .row.static { cursor: default; }
+  .row.static:hover { background: transparent; }
   .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-since { color: var(--text-faint); font: var(--t-help); }
 </style>

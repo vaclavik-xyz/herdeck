@@ -21,6 +21,8 @@ export interface DockAgent {
   serverId: string;
   paneId: string;
   agentType: string;
+  /** "herdr" or "t3": a T3 thread has no herdr pane to open or observe. */
+  backend: string;
   title: string; // task title, else workspace, repo, label (runtime-side)
   repo: string;
   workspace: string;
@@ -74,6 +76,7 @@ export function parseDockAgent(raw: unknown): DockAgent | null {
     serverId,
     paneId,
     agentType: str(v.agent_type),
+    backend: str(v.backend) || "herdr",
     title: str(v.title),
     repo: str(v.repo),
     workspace: str(v.workspace),
