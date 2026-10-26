@@ -35,6 +35,21 @@ def _ci_wait_text(text):
     return bool(_CI_CMD.search(text) or (_CI_WAIT.search(text) and _CI_SUBJECT.search(text)))
 
 
+def holds_completion(task):
+    """Mirrors upstream backgroundWorkHoldsCompletion: a task the agent awaits
+    (t3_background_wait, ``awaited``) holds a finished run, so T3 shows the
+    thread as Waiting. Unawaited commands (a dev server left running) and
+    monitors do not; subagents, background tasks and unknown kinds do."""
+    return task.get("awaited") is True or task.get("kind") not in ("command", "monitor")
+
+
+def wait_label(tasks):
+    if any(t.get("kind") == "command" and _ci_wait_text(t.get("description") or "") for t in tasks):
+        return "CI"
+    kind = (tasks[0].get("kind") if tasks else "") or ""
+    return _TASK_LABELS.get(kind, "WAITING")
+
+
 def timestamp(value):
     try:
         parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
@@ -170,13 +185,9 @@ def classify(shell, now, life):
     if ci_wait(shell, tasks):
         return Status.WAITING, "", "CI", "waiting"
     if st == "completed":
-        # Mirrors upstream backgroundWorkHoldsCompletion: a command (a dev
-        # server left running) does not hold a finished run; subagents,
-        # monitors, background tasks and unknown kinds do.
-        tasks = [t for t in tasks if t.get("kind") != "command"]
+        tasks = [t for t in tasks if holds_completion(t)]
     if st == "waiting" or (st == "completed" and tasks):
-        kind = (tasks[0].get("kind") if tasks else "") or ""
-        return Status.WAITING, "", _TASK_LABELS.get(kind, "WAITING"), "waiting"
+        return Status.WAITING, "", wait_label(tasks), "waiting"
     if st == "failed":
         label = "LIMIT" if shell.get("lastErrorClass") == "usage_limit" else "ERROR"
         return Status.UNKNOWN, "error", label, st

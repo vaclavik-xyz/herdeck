@@ -72,8 +72,9 @@ CASES = [
     ({"status": "completed", "pendingBackgroundTasks": [{"taskId": "a", "kind": "subagent"}]}, {},
      Status.WAITING, "", "SUBAGENT"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "command"}]}, {}, Status.WAITING, "", "COMMAND"),
-    # A running command (dev server) does not hold a completed run; upstream
-    # backgroundWorkHoldsCompletion. Unknown kinds still hold.
+    # A running command (dev server) or monitor does not hold a completed run
+    # unless the agent awaits it; upstream backgroundWorkHoldsCompletion.
+    # Unknown kinds still hold.
     ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command"}],
       "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, D, "completion", ""),
     ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command"}],
@@ -83,6 +84,19 @@ CASES = [
     ({"status": "completed", "pendingBackgroundTasks": [{"kind": "future_kind"}]}, {},
      Status.WAITING, "", "WAITING"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "monitor"}]}, {}, Status.WAITING, "", "MONITOR"),
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "monitor"}],
+      "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, D, "completion", ""),
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "monitor", "awaited": True}]}, {},
+     Status.WAITING, "", "MONITOR"),
+    ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command", "awaited": True,
+                                                         "description": "npm run build"}]}, {},
+     Status.WAITING, "", "COMMAND"),
+    # The live case: an awaited CI wait whose PR already merged (waiting on the
+    # deploy) is still Waiting in T3, so it must not read as done.
+    ({"status": "completed", "pendingBackgroundTasks": [{**CI_CMD, "awaited": True,
+                                                         "description": "Wait for web CI and deploy of #669"}],
+      "pullRequests": [{"snapshot": {"state": "merged"}}],
+      "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, Status.WAITING, "", "CI"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "background_task"}]}, {},
      Status.WAITING, "", "BACKGROUND"),
     # A command polling an open linked PR's checks holds the run as CI; T3
