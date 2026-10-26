@@ -1478,3 +1478,19 @@ def test_label_tiles_never_draw_the_badge(tmp_path):
         _pixels(p, _TileView(0, "Back", "grey")).tobytes()
         == _pixels(p, _TileView(0, "Back", "grey", subagents=5)).tobytes()
     )
+
+
+def test_wait_reason_is_drawn_and_keys_the_tile_cache(tmp_path):
+    from herdeck.driver.base import TileView, time_line
+
+    assert time_line("CI", "4m") == "CI · 4m"
+    assert time_line("", "4m") == "4m"
+    assert time_line("CI", None) == "CI"
+    p = IconProvider(str(tmp_path), {}, fetch=lambda s: None)
+
+    def tile(reason):
+        return TileView(0, "api", "violet", agent_type="claude", repo="api",
+                        status_text="WAITING", time_text="4m", wait_reason=reason)
+
+    assert p.render_tile(tile("CI")) != p.render_tile(tile("SUB"))
+    assert p.render_tile_bytes(tile("CI")) != p.render_tile_bytes(tile("SUB"))

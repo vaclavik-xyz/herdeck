@@ -171,7 +171,7 @@ def _top_pills(ctx, d, tile, status) -> tuple[str, str]:
 
 
 def _waiting_label(ctx, tile) -> str:
-    return (tile.status_text or "").strip() or k.t(ctx, "status.waiting")
+    return k.holder_label(ctx, tile)
 
 
 def _waiting_pill(ctx, d, tile, accent, left) -> None:

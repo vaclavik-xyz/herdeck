@@ -11,7 +11,7 @@ def test_dev_build_has_an_isolated_unsigned_macos_artifact():
     )
 
     assert "workflow_dispatch:" in workflow
-    assert "runs-on: macos-14" in workflow
+    assert "runs-on: macos-15" in workflow
     assert "HERDECK_BUILD_CHANNEL: dev" in workflow
     assert "HERDECK_BUILD_SHA: ${{ github.sha }}" in workflow
     assert "bash desktop/scripts/build-sidecar.sh" in workflow

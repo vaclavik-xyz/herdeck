@@ -236,11 +236,15 @@ export interface ServerRecord {
   id: string;
   url: string;
   token_env: string;
+  /** Optional short display name (e.g. "M4") shown as the tile's server tag. */
+  label?: string;
   /** Path to a 0600 file holding the token; read after the env var, before the keychain. */
   token_file?: string;
   backend?: string;
   /** T3 only: read this Mac's T3 desktop visited state (ServersSection toggle). */
   desktop_read_state?: boolean;
+  /** T3 only: `user@host` that issues/renews the token over SSH (`t3_setup --renew-all`). */
+  issuer_ssh?: string;
 }
 
 export interface LocalSessionRecord {
@@ -280,16 +284,46 @@ export function serversOf(payload: ConfigPayload): ServerRecord[] {
   return raw.map((s) => {
     const r = obj(s);
     return { id: str(r.id), url: str(r.url), token_env: str(r.token_env),
+      ...(typeof r.label === "string" ? { label: r.label } : {}),
       ...(typeof r.token_file === "string" ? { token_file: r.token_file } : {}),
       ...(typeof r.backend === "string" ? { backend: r.backend } : {}),
-      ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}) };
+      ...(typeof r.desktop_read_state === "boolean" ? { desktop_read_state: r.desktop_read_state } : {}),
+      ...(typeof r.issuer_ssh === "string" ? { issuer_ssh: r.issuer_ssh } : {}) };
   });
 }
 
-/** The TOML shape of a record: a blank `token_file` is dropped (the backend
- *  rejects an empty path), and so is a blank `token_env` next to a token file —
- *  a file-only server is valid, an empty env-var name is not. */
-function normalizeServer(s: ServerRecord): ServerRecord {
+/** Mirror of settings.SERVER_LABEL_MAX: the longest label the backend accepts. */
+export const SERVER_LABEL_MAX = 16;
+
+/** The label as the backend keeps it (trimmed), "" when none. Every display of
+ *  a server's label goes through this so the editor and the connection list agree. */
+export function serverLabel(server: Pick<ServerRecord, "label">): string {
+  return (server.label ?? "").trim();
+}
+
+/** Why server `index`'s label would be rejected on save, mirroring
+ *  settings._server_label / _check_unique_labels: "too_long" past
+ *  SERVER_LABEL_MAX characters (code points, like Python's len), "duplicate"
+ *  when an earlier server already uses it (case-insensitive). null when fine. */
+export function serverLabelIssue(servers: ServerRecord[], index: number): "too_long" | "duplicate" | null {
+  const label = serverLabel(servers[index] ?? {});
+  if (!label) return null;
+  if ([...label].length > SERVER_LABEL_MAX) return "too_long";
+  const key = label.toLowerCase();
+  if (servers.slice(0, index).some((s) => serverLabel(s).toLowerCase() === key)) return "duplicate";
+  return null;
+}
+
+/** The TOML shape of a record: a blank `token_file` or `issuer_ssh` is dropped
+ *  (the backend rejects an empty value), and so is a blank `token_env` next to a
+ *  token file — a file-only server is valid, an empty env-var name is not. A
+ *  blank `label` is dropped too (no label = the backend name on the tile). */
+function normalizeServer(record: ServerRecord): ServerRecord {
+  const { label, issuer_ssh, ...plain } = record;
+  let s: ServerRecord = (label ?? "").trim() ? { ...plain, label } : plain;
+  // A blank issuer_ssh is dropped too: the backend only accepts user@host.
+  const issuer = (issuer_ssh ?? "").trim();
+  s = issuer ? { ...s, issuer_ssh: issuer } : s;
   const { token_file, ...rest } = s;
   const file = (token_file ?? "").trim() ? token_file : undefined;
   if (file === undefined) return rest;
@@ -323,17 +357,6 @@ export function updateServer(
   value: string,
 ): ConfigPayload {
   const servers = serversOf(payload).map((s, i) => (i === index ? { ...s, [field]: value } : s));
-  return withServers(payload, servers);
-}
-
-/** NEW payload with server `index`'s T3 `desktop_read_state` set (false drops
- *  the key: it is the backend default and only valid on T3 servers). */
-export function setServerReadState(payload: ConfigPayload, index: number, value: boolean): ConfigPayload {
-  const servers = serversOf(payload).map((s, i) => {
-    if (i !== index) return s;
-    const { desktop_read_state: _drop, ...rest } = s;
-    return value ? { ...rest, desktop_read_state: true } : rest;
-  });
   return withServers(payload, servers);
 }
 

@@ -17,10 +17,15 @@ class ServerConfig:
     url: str
     token: str
     backend: str = "herdr"
-    # T3 only: read this machine's T3 desktop "visited" state so opening a
-    # finished thread in the T3 desktop clears the deck's Done (t3_desktop_seen).
-    # HERDECK_T3_DESKTOP_READ_STATE=1 still enables it for every T3 server.
+    # T3 only, OBSOLETE and ignored: T3 0.0.46+ (orchestration protocol 2)
+    # keeps read state on the server. Still parsed so older configs load; the
+    # T3 connector logs a one-time warning when it is set.
     desktop_read_state: bool = False
+    # Optional short display name (e.g. "M4"): the tile's server tag when
+    # [view].tile_fields has "server", instead of the backend name.
+    label: str | None = None
+    # T3 only: ``user@host`` that issues/renews the token over SSH (t3_setup).
+    issuer_ssh: str | None = None
 
 
 @dataclass

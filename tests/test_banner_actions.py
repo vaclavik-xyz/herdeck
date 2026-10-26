@@ -413,7 +413,7 @@ def test_binary_blocked_banner_carries_approve_and_deny():
     [deliver] = pending
     deliver()
     [(title, body, meta)] = recorder.calls
-    assert title == "claude · needs input" and body == "p0 · main"
+    assert title == "Claude · needs input" and body == "p0 · main"
     assert meta["actions"] == [
         {"id": "approve", "label": "Approve"},
         {"id": "deny", "label": "Deny"},

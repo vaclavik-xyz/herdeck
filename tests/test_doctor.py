@@ -1,3 +1,5 @@
+import pytest
+
 from herdeck.doctor import (
     Check,
     _socket_snapshot,
@@ -650,3 +652,194 @@ def test_collect_checks_includes_subagent_hooks(tmp_path, monkeypatch):
     checks = {check.name: check for check in collect_checks()}
     assert checks["subagent hooks"].ok is True
     assert "not installed" in checks["subagent hooks"].detail
+
+
+@pytest.mark.parametrize("descriptor,code,expected", [
+    ({"orchestrationProtocolVersion": 1}, None, "orchestration protocol 1; Herdeck needs 2"),
+    ("ok", 401, "credential invalid or expired"),
+    ("ok", 403, "credential lacks orchestration:read"),
+])
+def test_check_servers_t3_messages(monkeypatch, descriptor, code, expected):
+    from herdeck import t3_client
+    from herdeck.config import ServerConfig
+    from herdeck.doctor import check_servers
+
+    def get(self, route):
+        if route.endswith("environment") and descriptor != "ok":
+            return descriptor
+        if route.endswith("environment"):
+            return {"orchestrationProtocolVersion": 2, "capabilities": {}}
+        raise t3_client.T3Error("rejected", code)
+    monkeypatch.setattr(t3_client.T3Http, "get", get)
+    [c] = check_servers([ServerConfig("t3", "http://127.0.0.1:3773", "tok", "t3")], None)
+    assert not c.ok and expected in c.detail
+
+
+# --- T3 environment identity (descriptor) -----------------------------------
+
+_LOCAL = "http://127.0.0.1:3773"
+_TUNNEL = "http://127.0.0.1:13773"
+_ENVS = {
+    _LOCAL: {"environmentId": "9dd1aaaa-local", "label": "Jupiter-M4mini"},
+    _TUNNEL: {"environmentId": "77ccbbbb-remote", "label": "macBench"},
+}
+
+
+def _fake_fetch(table):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        answer = table.get(url)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is None:
+            raise OSError("connection refused")
+        return answer
+
+    fetch.calls = calls
+    return fetch
+
+
+def _t3(sid, url):
+    from herdeck.config import ServerConfig
+
+    return ServerConfig(sid, url, "tok", "t3")
+
+
+def test_t3_unconnected_local_server_warns_with_setup_hint():
+    from herdeck.doctor import check_t3_environments
+
+    checks = check_t3_environments([_t3("t3-bench", _TUNNEL)], _LOCAL, _fake_fetch(_ENVS))
+    by_name = {c.name: c for c in checks}
+    local = by_name["local T3 server"]
+    assert local.ok and local.warning
+    assert "Jupiter-M4mini" in local.detail and _LOCAL in local.detail
+    assert "python -m herdeck.t3_setup --id t3-local" in local.detail
+    assert "t3-bench=macBench (77ccbbbb)" in by_name["T3 environments"].detail
+    assert "! local T3 server:" in format_report(checks)
+
+
+def test_t3_local_server_reached_through_tunnel_url_is_not_flagged():
+    from herdeck.doctor import check_t3_environments
+
+    # The configured URL differs from the runtime origin, but the descriptor
+    # proves it is the same environment.
+    envs = {_LOCAL: _ENVS[_LOCAL], _TUNNEL: _ENVS[_LOCAL]}
+    checks = check_t3_environments([_t3("t3-local", _TUNNEL)], _LOCAL, _fake_fetch(envs))
+    assert not any(c.warning for c in checks)
+    local = next(c for c in checks if c.name == "local T3 server")
+    assert local.ok and "connected as 't3-local'" in local.detail
+
+
+def test_t3_suggested_id_avoids_taken_ids():
+    from herdeck.doctor import check_t3_environments
+
+    checks = check_t3_environments([_t3("t3-local", _TUNNEL)], _LOCAL, _fake_fetch(_ENVS))
+    local = next(c for c in checks if c.name == "local T3 server")
+    assert "--id t3-jupiter-m4mini" in local.detail
+
+
+def test_t3_duplicate_environment_warns():
+    from herdeck.doctor import check_t3_environments
+
+    other = "http://100.100.1.2:3773"
+    envs = {_TUNNEL: _ENVS[_TUNNEL], other: _ENVS[_TUNNEL]}
+    checks = check_t3_environments([_t3("a", _TUNNEL), _t3("b", other)], None, _fake_fetch(envs))
+    dup = next(c for c in checks if c.name == "T3 duplicate connection")
+    assert dup.ok and dup.warning
+    assert "'a', 'b'" in dup.detail and "macBench" in dup.detail
+    assert "--disconnect --id b" in dup.detail
+
+
+def test_t3_unreachable_descriptor_does_not_crash():
+    from herdeck.doctor import check_t3_environments
+
+    fetch = _fake_fetch({_TUNNEL: RuntimeError("boom"), _LOCAL: {"nope": 1}})
+    checks = check_t3_environments([_t3("t3-bench", _TUNNEL)], _LOCAL, fetch)
+    assert [c.name for c in checks] == ["T3 environments"]
+    assert checks[0].ok and "t3-bench=descriptor unavailable" in checks[0].detail
+    assert fetch.calls == [_TUNNEL, _LOCAL]
+
+
+def test_t3_environments_skipped_without_t3():
+    from herdeck.config import ServerConfig
+    from herdeck.doctor import check_t3_environments
+
+    fetch = _fake_fetch({})
+    assert check_t3_environments([ServerConfig("m4", "ws://x", "t")], None, fetch) == []
+    assert fetch.calls == []
+
+
+def test_collect_checks_warns_about_unconnected_local_t3(tmp_path, monkeypatch):
+    from herdeck import doctor as doctor_mod
+
+    monkeypatch.setenv("HERDECK_CONFIG", str(tmp_path / "missing.toml"))
+    monkeypatch.setenv("HERDR_SOCKET", str(tmp_path / "missing.sock"))
+    monkeypatch.setattr(doctor_mod, "_local_t3_origin", lambda: _LOCAL)
+    monkeypatch.setattr(doctor_mod, "_t3_descriptor", _fake_fetch(_ENVS))
+    checks = {c.name: c for c in collect_checks()}
+    assert checks["local T3 server"].warning
+
+
+def test_t3_descriptor_is_fetched_without_a_bearer(monkeypatch):
+    import urllib.request
+
+    from herdeck import doctor as doctor_mod
+
+    seen = {}
+
+    class Response:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            return b'{"environmentId": "e1", "label": "L"}'
+
+    def open_(self, req, timeout=None):
+        seen["auth"] = req.get_header("Authorization")
+        seen["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_)
+    assert doctor_mod._t3_descriptor(_LOCAL)["environmentId"] == "e1"
+    assert seen == {"auth": None, "timeout": doctor_mod.T3_DESCRIPTOR_TIMEOUT}
+
+
+@pytest.mark.parametrize("state,expected", [
+    ({"port": 3773, "origin": "http://127.0.0.1:3773"}, "http://127.0.0.1:3773"),
+    ({"host": "0.0.0.0", "port": 3773}, "http://127.0.0.1:3773"),
+    ({"host": "::1", "port": 9}, "http://[::1]:9"),
+    # A wildcard bind reported as the origin is probed over loopback.
+    ({"port": 3773, "origin": "http://0.0.0.0:3773"}, "http://127.0.0.1:3773"),
+    ({"port": 3773, "origin": "http://[::]:3773/"}, "http://127.0.0.1:3773"),
+])
+def test_local_runtime_origin(tmp_path, state, expected):
+    import json
+
+    from herdeck.t3_client import local_runtime_origin
+
+    (tmp_path / "userdata").mkdir()
+    (tmp_path / "userdata/server-runtime.json").write_text(json.dumps(state))
+    assert local_runtime_origin(tmp_path) == expected
+
+
+def test_doctor_probes_a_wildcard_bound_local_t3_over_loopback(tmp_path, monkeypatch):
+    import json
+
+    import herdeck.doctor as doctor_mod
+    from herdeck.t3_client import T3Http
+
+    (tmp_path / ".t3/userdata").mkdir(parents=True)
+    (tmp_path / ".t3/userdata/server-runtime.json").write_text(
+        json.dumps({"port": 3773, "origin": "http://0.0.0.0:3773"}))
+    monkeypatch.undo()  # drop the autouse stub of _local_t3_origin; HOME is faked instead
+    monkeypatch.setattr(doctor_mod.Path, "home", lambda: tmp_path)
+    assert doctor_mod._local_t3_origin() == "http://127.0.0.1:3773"
+    with pytest.raises(ValueError):  # the client itself stays strict
+        T3Http("http://0.0.0.0:3773", "")

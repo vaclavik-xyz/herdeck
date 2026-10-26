@@ -108,7 +108,7 @@ def test_headline_subagents_are_a_pill_apart_from_the_holder_label(provider, log
         return pill(ctx, d, x, top, text, *args, **kw)
 
     monkeypatch.setattr(headline.k, "pill", spy)
-    headline.THEME.agent_tile(agent("waiting", status_text="REVIEW +1", subagents=2), make_ctx(provider), None)
+    headline.THEME.agent_tile(agent("waiting", wait_reason="REVIEW +1", subagents=2), make_ctx(provider), None)
     drawn = texts(log)
     assert "REVIEW +1" in drawn  # whole, never "REVIEW +1  +2"
     assert pills == ["+2"]
@@ -116,7 +116,7 @@ def test_headline_subagents_are_a_pill_apart_from_the_holder_label(provider, log
 
 def test_headline_word_wins_over_the_subagent_pill(provider, log):
     long_word = "WAITING ON REVIEW"
-    headline.THEME.agent_tile(agent("waiting", status_text=long_word, subagents=12), make_ctx(provider), None)
+    headline.THEME.agent_tile(agent("waiting", wait_reason=long_word, subagents=12), make_ctx(provider), None)
     drawn = texts(log)
     assert "+12" not in drawn
     assert any(t.startswith("WAITING") for t in drawn)

@@ -1,0 +1,410 @@
+{
+ "snapshotSequence": 35,
+ "projection": {
+  "thread": {
+   "createdBy": "system",
+   "creationSource": "server",
+   "id": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+   "projectId": "a100e613-4182-44dc-aec8-154b0ef9b7d4",
+   "title": "New thread",
+   "providerInstanceId": "codex",
+   "modelSelection": {
+    "instanceId": "codex",
+    "model": "gpt-6-astra"
+   },
+   "runtimeMode": "full-access",
+   "interactionMode": "default",
+   "branch": null,
+   "worktreePath": null,
+   "activeProviderThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+   "lineage": {
+    "parentThreadId": null,
+    "relationshipToParent": null,
+    "rootThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428"
+   },
+   "forkedFrom": null,
+   "createdAt": "2026-10-14T14:46:03.425Z",
+   "updatedAt": "2026-10-14T15:05:11.071Z",
+   "archivedAt": null,
+   "settledOverride": null,
+   "settledAt": null,
+   "snoozedUntil": null,
+   "snoozedAt": null,
+   "lastVisitedAt": "2026-10-14T14:50:00.000Z",
+   "deletedAt": null
+  },
+  "runs": [
+   {
+    "id": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "ordinal": 1,
+    "providerInstanceId": "codex",
+    "modelSelection": {
+     "instanceId": "codex",
+     "model": "gpt-6-astra"
+    },
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "userMessageId": "1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+    "rootNodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "activeAttemptId": "run-attempt:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:attempt:1",
+    "status": "failed",
+    "queuePosition": null,
+    "requestedAt": "2026-10-14T15:04:45.130Z",
+    "startedAt": "2026-10-14T15:04:47.035Z",
+    "completedAt": "2026-10-14T15:05:11.071Z",
+    "checkpointId": null,
+    "contextHandoffId": null
+   }
+  ],
+  "attempts": [
+   {
+    "id": "run-attempt:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:attempt:1",
+    "nativeThreadId": "01a13af1-c69a-7072-9578-c834573d7c96",
+    "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "attemptOrdinal": 1,
+    "rootNodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "providerInstanceId": "codex",
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "providerTurnId": null,
+    "reason": "initial",
+    "status": "failed",
+    "startedAt": "2026-10-14T15:04:47.035Z",
+    "completedAt": "2026-10-14T15:05:11.071Z"
+   }
+  ],
+  "nodes": [
+   {
+    "id": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "parentNodeId": null,
+    "rootNodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "kind": "root_turn",
+    "status": "failed",
+    "countsForRun": true,
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "providerTurnId": null,
+    "nativeItemRef": null,
+    "runtimeRequestId": null,
+    "checkpointScopeId": "checkpoint-scope:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:name:root",
+    "startedAt": "2026-10-14T15:04:47.035Z",
+    "completedAt": "2026-10-14T15:05:11.071Z"
+   }
+  ],
+  "subagents": [],
+  "providerSessions": [
+   {
+    "id": "provider-session:provider-instance:codex:shared",
+    "driver": "codex",
+    "providerInstanceId": "codex",
+    "status": "ready",
+    "cwd": "/Users/dev/proj",
+    "model": "gpt-6-astra",
+    "capabilities": {
+     "sessions": {
+      "supportsMultipleProviderThreadsPerSession": true,
+      "supportsModelSwitchInSession": true,
+      "supportsProviderSwitchingViaHandoff": true,
+      "supportsRuntimeModeSwitchInSession": true,
+      "pendingRequestsSurviveRestart": false
+     },
+     "threads": {
+      "canCreateEmptyThread": true,
+      "canReadThreadSnapshot": true,
+      "canRollbackThread": true,
+      "canForkThread": true,
+      "canForkFromTurn": true,
+      "canForkFromSubagentThread": true,
+      "exposesNativeThreadId": true
+     },
+     "turns": {
+      "exposesNativeTurnId": true,
+      "emitsTurnStarted": true,
+      "emitsTurnCompleted": true,
+      "supportsInterrupt": true,
+      "supportsActiveSteering": true,
+      "supportsSteeringByInterruptRestart": true,
+      "supportsQueuedMessages": true,
+      "terminalStatusQuality": "strong"
+     },
+     "streaming": {
+      "streamsAssistantText": true,
+      "streamsReasoning": true,
+      "streamsToolOutput": true,
+      "streamsPlanText": true,
+      "emitsMessageCompleted": true
+     },
+     "tools": {
+      "exposesToolItemIds": true,
+      "emitsToolStarted": true,
+      "emitsToolCompleted": true,
+      "emitsToolOutput": true,
+      "supportsMcpTools": true,
+      "supportsDynamicToolCallbacks": true
+     },
+     "approvals": {
+      "supportsCommandApproval": true,
+      "supportsFileReadApproval": true,
+      "supportsFileChangeApproval": true,
+      "supportsApplyPatchApproval": true,
+      "approvalsHaveNativeRequestIds": true,
+      "approvalCallbacksAreLiveOnly": true,
+      "approvalsCanOriginateFromSubagents": true
+     },
+     "planning": {
+      "emitsPlanUpdated": true,
+      "emitsTodoList": true,
+      "emitsProposedPlan": true,
+      "supportsStructuredQuestions": true,
+      "planDeltasHaveItemIds": true
+     },
+     "subagents": {
+      "supportsSubagents": true,
+      "exposesSubagentThreadIds": true,
+      "emitsSubagentLifecycle": true,
+      "canWaitForSubagents": true,
+      "canCloseSubagents": true,
+      "canForkSubagentThread": true
+     },
+     "context": {
+      "acceptsSystemContext": true,
+      "acceptsDeveloperContext": true,
+      "acceptsSyntheticUserContext": true,
+      "canGenerateSummaries": true,
+      "canConsumeHandoffSummaries": true,
+      "supportsDeltaHandoff": true,
+      "supportsFullThreadHandoff": true,
+      "maxRecommendedHandoffChars": null
+     },
+     "checkpointing": {
+      "appCanCheckpointFilesystem": true,
+      "supportsNestedCheckpointScopes": true,
+      "providerCanRollbackConversation": true,
+      "providerRollbackReturnsSnapshot": true,
+      "providerCanReadConversationSnapshot": true
+     },
+     "identity": {
+      "nativeThreadIds": "strong",
+      "nativeTurnIds": "strong",
+      "nativeItemIds": "strong",
+      "nativeRequestIds": "strong"
+     },
+     "runtimePolicy": {
+      "enforcement": "native"
+     }
+    },
+    "createdAt": "2026-10-14T15:04:45.242Z",
+    "updatedAt": "2026-10-14T15:04:45.242Z",
+    "lastError": null
+   }
+  ],
+  "providerThreads": [
+   {
+    "id": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "driver": "codex",
+    "providerInstanceId": "codex",
+    "providerSessionId": "provider-session:provider-instance:codex:shared",
+    "appThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "ownerNodeId": null,
+    "nativeThreadRef": {
+     "driver": "codex",
+     "nativeId": "01a13af1-c69a-7072-9578-c834573d7c96",
+     "strength": "strong"
+    },
+    "nativeConversationHeadRef": null,
+    "status": "idle",
+    "firstRunOrdinal": 1,
+    "lastRunOrdinal": 1,
+    "handoffIds": [],
+    "forkedFrom": null,
+    "pendingBackgroundTasks": [],
+    "contextUsage": null,
+    "nativeMetadata": null,
+    "goal": null,
+    "createdAt": "2026-10-14T15:04:45.130Z",
+    "updatedAt": "2026-10-14T15:05:11.071Z"
+   }
+  ],
+  "providerTurns": [
+   {
+    "id": "provider-turn:provider:codex:native-turn:01a13af1-cebf-71c1-9d3e-23776eb9778d",
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "runAttemptId": "run-attempt:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:attempt:1",
+    "nativeTurnRef": {
+     "driver": "codex",
+     "nativeId": "01a13af1-cebf-71c1-9d3e-23776eb9778d",
+     "strength": "strong"
+    },
+    "ordinal": 1,
+    "status": "failed",
+    "startedAt": "2026-10-14T15:04:48.089Z",
+    "completedAt": "2026-10-14T15:05:10.000Z",
+    "turnTokenUsage": {
+     "usageScope": "main_agent",
+     "hasSubagents": false,
+     "usageStatus": "unavailable"
+    }
+   }
+  ],
+  "runtimeRequests": [],
+  "messages": [
+   {
+    "createdBy": "user",
+    "creationSource": "web",
+    "id": "1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+    "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "role": "user",
+    "text": "Reply with exactly the word OK and nothing else. Do not run any tools.",
+    "attachments": [],
+    "streaming": false,
+    "createdAt": "2026-10-14T15:04:45.130Z",
+    "updatedAt": "2026-10-14T15:04:45.130Z"
+   }
+  ],
+  "plans": [],
+  "turnItems": [
+   {
+    "id": "turn-item:message:1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+    "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "providerTurnId": null,
+    "nativeItemRef": null,
+    "parentItemId": null,
+    "ordinal": 1000001,
+    "status": "completed",
+    "title": null,
+    "startedAt": "2026-10-14T15:04:45.130Z",
+    "completedAt": "2026-10-14T15:04:45.130Z",
+    "updatedAt": "2026-10-14T15:04:45.130Z",
+    "createdBy": "user",
+    "creationSource": "web",
+    "type": "user_message",
+    "messageId": "1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+    "inputIntent": "turn_start",
+    "text": "Reply with exactly the word OK and nothing else. Do not run any tools.",
+    "attachments": []
+   },
+   {
+    "id": "turn-item:provider:codex:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3Acodex%3Anative-turn%3A01a13af1-cebf-71c1-9d3e-23776eb9778d",
+    "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "providerTurnId": "provider-turn:provider:codex:native-turn:01a13af1-cebf-71c1-9d3e-23776eb9778d",
+    "nativeItemRef": null,
+    "parentItemId": null,
+    "ordinal": 1000002,
+    "status": "failed",
+    "title": "Provider error",
+    "startedAt": "2026-10-14T15:04:54.202Z",
+    "completedAt": "2026-10-14T15:05:11.060Z",
+    "updatedAt": "2026-10-14T15:05:11.060Z",
+    "type": "error",
+    "failure": {
+     "class": "provider_error",
+     "message": "unexpected status 401 Unauthorized: Missing bearer [REDACTED] basic [REDACTED] in header, url: https://api.openai.com/v1/responses, cf-ray: a4a77b1cbb92d1c5-PRG, request id: req_c86c6a49704944dca6374a71218225f4",
+     "code": "httpConnectionFailed",
+     "retryable": null
+    },
+    "retry": {
+     "attempt": 5,
+     "maxAttempts": 5,
+     "retryDelayMs": null
+    }
+   }
+  ],
+  "checkpointScopes": [
+   {
+    "id": "checkpoint-scope:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:name:root",
+    "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+    "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+    "parentScopeId": null,
+    "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+    "kind": "root_run",
+    "ordinalWithinParent": 0,
+    "advancesAppRunCount": true,
+    "cwd": "/Users/dev/proj",
+    "createdAt": "2026-10-14T15:04:45.130Z"
+   }
+  ],
+  "checkpoints": [],
+  "contextHandoffs": [],
+  "contextTransfers": [],
+  "visibleTurnItems": [
+   {
+    "position": 0,
+    "visibility": "local",
+    "sourceThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "sourceItemId": "turn-item:message:1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+    "item": {
+     "id": "turn-item:message:1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+     "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+     "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+     "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+     "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+     "providerTurnId": null,
+     "nativeItemRef": null,
+     "parentItemId": null,
+     "ordinal": 1000001,
+     "status": "completed",
+     "title": null,
+     "startedAt": "2026-10-14T15:04:45.130Z",
+     "completedAt": "2026-10-14T15:04:45.130Z",
+     "updatedAt": "2026-10-14T15:04:45.130Z",
+     "createdBy": "user",
+     "creationSource": "web",
+     "type": "user_message",
+     "messageId": "1d7d2d22-eb09-427f-99b2-bf63c93a766d",
+     "inputIntent": "turn_start",
+     "text": "Reply with exactly the word OK and nothing else. Do not run any tools.",
+     "attachments": []
+    }
+   },
+   {
+    "position": 1,
+    "visibility": "local",
+    "sourceThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+    "sourceItemId": "turn-item:provider:codex:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3Acodex%3Anative-turn%3A01a13af1-cebf-71c1-9d3e-23776eb9778d",
+    "item": {
+     "id": "turn-item:provider:codex:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3Acodex%3Anative-turn%3A01a13af1-cebf-71c1-9d3e-23776eb9778d",
+     "threadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+     "runId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+     "nodeId": "node:run:run%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1:root",
+     "providerThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+     "providerTurnId": "provider-turn:provider:codex:native-turn:01a13af1-cebf-71c1-9d3e-23776eb9778d",
+     "nativeItemRef": null,
+     "parentItemId": null,
+     "ordinal": 1000002,
+     "status": "failed",
+     "title": "Provider error",
+     "startedAt": "2026-10-14T15:04:54.202Z",
+     "completedAt": "2026-10-14T15:05:11.060Z",
+     "updatedAt": "2026-10-14T15:05:11.060Z",
+     "type": "error",
+     "failure": {
+      "class": "provider_error",
+      "message": "unexpected status 401 Unauthorized: Missing bearer [REDACTED] basic [REDACTED] in header, url: https://api.openai.com/v1/responses, cf-ray: a4a77b1cbb92d1c5-PRG, request id: req_c86c6a49704944dca6374a71218225f4",
+      "code": "httpConnectionFailed",
+      "retryable": null
+     },
+     "retry": {
+      "attempt": 5,
+      "maxAttempts": 5,
+      "retryDelayMs": null
+     }
+    }
+   }
+  ],
+  "updatedAt": "2026-10-14T15:05:11.071Z"
+ },
+ "historyCursor": null,
+ "hasMoreHistory": false,
+ "latestLocalTurnOrdinal": 1000002,
+ "payloadBudgetExceeded": false
+}

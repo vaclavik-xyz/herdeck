@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .. import __version__
 from ..config import ConfigError
+from ..driver.base import time_line
 from ..i18n import tr
 from ..model import AgentKey
 from ..orchestrator import Orchestrator
@@ -83,7 +84,12 @@ def tile_accessible_label(tile, lang: str = "en") -> str:
             if part and part not in parts:
                 parts.append(part)
         status = " ".join(
-            p for p in ((tile.status_text or "").strip().lower(), tile.time_text or "") if p
+            p
+            for p in (
+                (tile.status_text or "").strip().lower(),
+                time_line(getattr(tile, "wait_reason", ""), tile.time_text),
+            )
+            if p
         )
         if status:
             parts.append(status)

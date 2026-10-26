@@ -1,292 +1,156 @@
-"""T3 HTTP adapter. No provider process, terminal emulation or write retries.
+"""T3 Code backend connector on orchestration protocol 2.
 
-Contract: T3 0.0.31 core, negotiated 0.0.38 lifecycle, /api/orchestration/{shell,threads/:id,dispatch}.
-The connector callback surface matches Herdeck's existing bridge connector.
+Reads poll the HTTP shell every second and fetch a thread's bounded detail only
+when it changed; subagent children are listed on their parent's tile instead
+of getting one (``t3_state.published``). Actions are dispatched as V2 commands
+over the WebSocket RPC.
+The callback surface matches Herdeck's bridge connector (``on_snapshot``,
+``on_connection``, ``on_result``, ``health()``, ``send()``, ``run()``,
+``stop()``). Contract: docs/t3-code-integration.md.
+
+Delivery rules: every press re-reads the thread, must carry the revision the
+deck saw and an action that is still offered. Each command gets a uuid4
+``commandId`` that is remembered per (thread, revision, action, payload, text):
+a transport failure is retried once with the SAME command, and a later identical
+press (outcome unknown, or accepted before T3 published the new state) replays
+it, so the server's commandId dedupe means it can never execute twice. Only a
+rejection forgets the commands. A thread whose delivery outcome is unknown
+stays read-only until its revision changes.
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import ipaddress
 import json
+import logging
 import os
 import time
+import unicodedata
 import uuid
 from datetime import UTC, datetime
-from http.client import HTTPException
-from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-from .model import AgentKey, AgentState, Status
-from .t3_actions import extend_actions, semantic_command
-from .t3_desktop_seen import DesktopSeen
-from .t3_seen import SeenStore
-from .t3_state import lifecycle, queued_start, timestamp
+from .i18n import tr
+from .project_icon_discovery import icon_hash
+from .protocol import ProjectIcon
+from .t3_actions import Incompatible, build_commands, capabilities, negotiate, thread_actions
+from .t3_client import T3Client, T3Error, T3Http, T3Rejected
+from .t3_state import active_plan, lifecycle, published, thread_state
+
+# T3Error/T3Http are re-exported for settings.py.
+__all__ = ["T3Connector", "T3Error", "T3Http", "T3Rejected"]
+
+log = logging.getLogger("herdeck.t3")
+
+READ_STATE_OBSOLETE = ("[[servers]] desktop_read_state is obsolete: "
+                       "T3 0.0.46+ keeps read state on the server")
+OPERATE_DENIED = "credential lacks orchestration:operate"
+UNCERTAIN = "T3 delivery uncertain; inspect the conversation before retrying"
+CREDENTIAL_INVALID = "T3 credential invalid or expired"
+UNAVAILABLE = "T3 unavailable; check the connection"
+_CONNECT_ERRORS = {401: CREDENTIAL_INVALID,
+                   403: "T3 credential lacks orchestration:read",
+                   400: "T3 orchestration protocol mismatch (Herdeck needs 2)"}
+# Raised by the pure state/action mappers on a thread that breaks the contract.
+_MALFORMED = (KeyError, TypeError, ValueError, AttributeError)
+_DELIVERY_MEMORY = 256
+# A project's favicon is re-fetched after this long (T3 re-resolves it about
+# every 30 min); a project without one, or a failed fetch, is retried sooner.
+_ICON_RECHECK_S = 1800.0
+_ICON_RETRY_S = 600.0
+_read_state_warned = False
+# The descriptor label is a display name the deck may show as a tile tag.
+_LABEL_MAX = 32
 
 
-class T3Error(Exception):
-    """A sanitized transport/contract error; never includes response bodies."""
-
-    def __init__(self, message, code=None):
-        super().__init__(message)
-        self.code = code
+class _IncompatibleServer(T3Error):
+    """The descriptor does not speak orchestration protocol 2."""
 
 
-def validate_shell(snapshot):
-    if not isinstance(snapshot, dict) or any(
-        not isinstance(snapshot.get(field), list) for field in ("threads", "projects")
-    ):
-        raise T3Error("Unsupported T3 shell contract")
+def _warn_read_state(server):
+    global _read_state_warned
+    if _read_state_warned:
+        return
+    if getattr(server, "desktop_read_state", False) or os.environ.get("HERDECK_T3_DESKTOP_READ_STATE") == "1":
+        _read_state_warned = True
+        log.warning(READ_STATE_OBSOLETE)
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
+def descriptor_label(descriptor) -> str | None:
+    """The server's own display name (``label`` of ``/.well-known/t3/environment``,
+    e.g. "Jupiter-M4mini"), sanitized: it comes from the network, so only a
+    string counts, control/format characters are dropped, whitespace runs
+    collapse and the result is bounded. None when absent or blank."""
+    value = descriptor.get("label") if isinstance(descriptor, dict) else None
+    if not isinstance(value, str):
         return None
+    text = "".join(
+        " " if ch.isspace() else ch
+        for ch in value[: _LABEL_MAX * 4]
+        if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co", "Cn")
+    )
+    text = " ".join(text.split())[:_LABEL_MAX].strip()
+    return text or None
 
 
-class T3Http:
-    def __init__(self, url: str, token: str):
-        p = urlsplit(url)
-        try:
-            ip = ipaddress.ip_address(p.hostname or "")
-            private = ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
-        except ValueError:
-            private = p.hostname == "localhost"
-        if (p.scheme not in ("http", "https") or not p.hostname or p.username or p.password
-                or p.query or p.fragment or p.path not in ("", "/")
-                or (p.scheme == "http" and not private)):
-            raise ValueError("T3 requires a clean HTTPS origin or loopback/Tailscale HTTP origin")
-        self.url = url.rstrip("/")
-        self._token = token
-        self._opener = build_opener(ProxyHandler({}), _NoRedirect())
-
-    def _request(self, path, data=None):
-        req = Request(self.url + path, data=json.dumps(data).encode() if data is not None else None,
-                      headers={"Authorization": "Bearer " + self._token, "Content-Type": "application/json"})
-        try:
-            with self._opener.open(req, timeout=8) as response:
-                raw = response.read(8 * 1024 * 1024 + 1)
-                if len(raw) > 8 * 1024 * 1024:
-                    raise T3Error("T3 response exceeds limit")
-                result = json.loads(raw)
-                if not isinstance(result, dict):
-                    raise T3Error("Unsupported T3 response")
-                return result
-        except HTTPError as exc:
-            raise T3Error(f"T3 HTTP {exc.code}", exc.code) from None
-        except (URLError, OSError, ValueError, HTTPException):
-            raise T3Error("T3 transport or response error") from None
-
-    def get(self, path):
-        return self._request(path)
-
-    def dispatch(self, command):
-        return self._request("/api/orchestration/dispatch", command)
-
-
-def pending_requests(thread):
-    pending = {}
-    for activity in thread.get("activities", []):
-        payload = activity.get("payload") or {}
-        rid = payload.get("requestId")
-        kind = activity.get("kind", "")
-        if not rid:
-            continue
-        if kind in ("approval.requested", "user-input.requested"):
-            pending[rid] = {**payload, "kind": kind}
-        elif kind in ("approval.resolved", "user-input.resolved") or (
-            kind.endswith(".failed") and any(s in str(payload.get("detail", "")).lower()
-                for s in ("stale pending", "unknown pending"))
-        ):
-            pending.pop(rid, None)
-    return list(pending.values())
-
-
-def _actions(pending):
-    actions = []
-    # Multiple requests remain individually identified. Only offer choices for
-    # the first pending request; the next appears after its resolution.
-    if not pending:
-        return actions
-    p = pending[0]
-    if p.get("responseMode") == "message" or p.get("requestType") in ("tool_user_input", "auth_tokens_refresh"):
-        return actions
-    if p["kind"] == "approval.requested":
-        options = p.get("options") or [
-            {"decision": "accept", "label": "Approve"},
-            {"decision": "decline", "label": "Deny"},
-        ]
-        for opt in options:
-            if opt.get("decision") not in ("accept", "acceptForSession", "acceptAlways", "decline", "cancel"):
-                continue
-            actions.append({"id": {"accept": "approve", "acceptForSession": "approve_session", "acceptAlways": "approve_always"}.get(opt["decision"], "deny"),
-                "confirm": opt["decision"] in ("acceptForSession", "acceptAlways"),
-                "label": opt["label"], "subtext": opt.get("warning", ""),
-                "payload": {"requestId": p["requestId"], "decision": opt["decision"]}})
-    else:
-        questions = p.get("questions", [])
-        # Hardware v1 supports a single-choice question. Complex/free-text forms
-        # remain visible in the preview and must be answered in T3.
-        if len(questions) == 1 and not questions[0].get("multiSelect"):
-            q = questions[0]
-            for opt in q.get("options", []):
-                actions.append({"id": "answer", "label": opt["label"],
-                    "subtext": opt.get("description", ""),
-                    "payload": {"requestId": p["requestId"],
-                                "answers": {q["id"]: opt.get("value", opt["label"])}}})
-    return actions
-
-
-def thread_state(server_id, thread, projects, epoch, *, now=None, acknowledged=None, features=None):
-    now = datetime.now(UTC).timestamp() if now is None else now
-    session = thread.get("session") or {}
-    latest_turn = thread.get("latestTurn") or {}
-    pending = pending_requests(thread)
-    state = session.get("status")
-    life = lifecycle(thread, pending, now)
-    activity, attention, label = state or "idle", "", ""
-    completed = latest_turn.get("completedAt") or ""
-    completed_time, seen_time = timestamp(completed), timestamp(acknowledged)
-    is_seen = completed == acknowledged or (completed_time is not None and seen_time is not None and completed_time <= seen_time)
-    if life != "active":
-        status, label = Status.IDLE, life.upper()
-    elif pending or thread.get("hasPendingApprovals") or thread.get("hasPendingUserInput"):
-        status = Status.BLOCKED
-        attention = "approval" if any(p["kind"] == "approval.requested" for p in pending) or thread.get("hasPendingApprovals") else "input"
-    elif state == "error":
-        status, attention, label = Status.UNKNOWN, "error", "ERROR"
-    elif state in ("running", "starting") or session.get("activeTurnId"):
-        status = Status.WORKING
-        label = "CONNECTING" if state == "starting" else ""
-    elif queued_start(thread, now):
-        status, activity, label = Status.WORKING, "queued", "QUEUED"
-    elif state == "error" or latest_turn.get("state") == "error":
-        status, attention, label = Status.UNKNOWN, "error", "ERROR"
-    elif thread.get("interactionMode") == "plan" and thread.get("hasActionableProposedPlan"):
-        status, attention, label = Status.BLOCKED, "plan", "PLAN READY"
-    elif state in (None, "idle", "ready", "interrupted", "stopped"):
-        activity = thread.get("backgroundLiveness") or activity
-        if activity == "working":
-            status = Status.WORKING
-        elif activity == "monitoring":
-            status, label = Status.WAITING, "MONITORING"
-        else:
-            status = (Status.DONE if state != "interrupted" and latest_turn.get("state") == "completed"
-                      and completed and not is_seen else Status.IDLE)
-            attention = "completion" if status == Status.DONE else ""
-    else:
-        status = Status.UNKNOWN
-    actions = _actions(pending) if life == "active" else []
-    capabilities = ["read"]
-    if session.get("activeTurnId") and life == "active":
-        capabilities.append("stop")
-    if life == "active" and status in (Status.IDLE, Status.DONE) and thread.get("runtimeMode") and thread.get("interactionMode"):
-        capabilities.append("continue")
-    extend_actions(actions, thread, life, status, attention, activity, features or {}, now, completed)
-    capabilities.extend(a["id"] for a in actions)
-    if features is not None and not features.get("core"):
-        capabilities, actions = ["read"], []
-    identity = [epoch, thread["id"], session, pending, latest_turn,
-                thread.get("runtimeMode"), thread.get("interactionMode"), thread.get("modelSelection"),
-                [m.get("id") for m in thread.get("messages", []) if m.get("role") == "user"],
-                {k: thread.get(k) for k in ("settledOverride", "settledAt", "snoozedUntil", "snoozedAt",
-                    "archivedAt", "deletedAt", "latestUserMessageAt", "hasActionableProposedPlan", "proposedPlans", "backgroundLiveness")}, life, acknowledged, features or {}]
-    revision = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    project = projects.get(thread.get("projectId"), {})
-    preview = "\n".join(str(p.get("detail") or p.get("questions") or "Approval requested") for p in pending)
-    if not preview:
-        messages = thread.get("messages", [])
-        preview = str(messages[-1].get("text", "")) if messages else ""
-    if attention == "error":
-        preview = "T3 error: " + str(session.get("lastError") or "The latest turn failed. Inspect T3 for details.") + "\n" + preview
-    elif attention == "plan":
-        plans = thread.get("proposedPlans") or []
-        preview = "Plan ready — choose how to implement it.\n" + (str(plans[-1].get("planMarkdown", "")) if plans else preview)
-    elif attention in ("input", "approval") and not _actions(pending):
-        preview = "Answer in T3 — this form needs the full conversation UI.\n" + preview
-    elif activity in ("working", "monitoring") and not session.get("activeTurnId"):
-        preview = "Background work is active. Stop session ends the provider session; individual tasks are managed in T3.\n" + preview
-    if features is not None and not features.get("core"):
-        preview = "Unsupported T3 server version. Read-only connection.\n" + preview
-    if life != "active":
-        preview = life.capitalize() + " thread.\n" + preview
-    return AgentState(AgentKey(server_id, thread["id"]),
-        session.get("providerName") or (thread.get("modelSelection") or {}).get("provider", "default"),
-        thread.get("title", "T3 conversation"), status,
-        project=project.get("title", ""), repo=project.get("workspaceRoot", ""),
-        branch=thread.get("branch") or "", title=thread.get("title", ""),
-        display_agent="T3 Code", backend="t3", capabilities=tuple(capabilities),
-        backend_revision=revision, backend_actions=actions, preview=preview[:12000],
-        lifecycle=life, activity=activity, attention=attention, completed_at=completed,
-        state_labels={status.value: label} if label else {})
-
-
-def _observed_effect(thread, command):
-    """Reconcile an uncertain write using its exact message/turn/request identity.
-
-    A timestamp change or reconnect alone is insufficient evidence to unlock it.
-    """
-    kind = command["type"]
-    if kind == "thread.turn.start":
-        return any(m.get("id") == command["message"]["messageId"]
-                   for m in thread.get("messages", []))
-    if kind == "thread.turn.interrupt":
-        return (thread.get("session") or {}).get("activeTurnId") != command["turnId"]
-    if kind == "thread.settle":
-        return thread.get("settledOverride") == "settled"
-    if kind == "thread.unsettle":
-        return thread.get("settledOverride") == "active"
-    if kind == "thread.snooze":
-        actual, expected = timestamp(thread.get("snoozedUntil")), timestamp(command["snoozedUntil"])
-        return actual is not None and expected is not None and actual == expected
-    if kind == "thread.unsnooze":
-        return thread.get("snoozedUntil") is None
-    if kind == "thread.session.stop":
-        return (thread.get("session") or {}).get("status") == "stopped"
-    return "requestId" in command and not any(p["requestId"] == command["requestId"] for p in pending_requests(thread))
+def _connect_error(exc):
+    if isinstance(exc, _IncompatibleServer):
+        return str(exc)
+    if isinstance(exc, T3Error):
+        return _CONNECT_ERRORS.get(exc.code, UNAVAILABLE)
+    return UNAVAILABLE
 
 
 class T3Connector:
-    protocol = 1
+    protocol = 2
     capabilities = frozenset()
 
     def __init__(self, server, on_snapshot, on_event, on_connection, on_result=None,
-                 on_error=None, **kwargs):
+                 on_error=None, *, client=None, language="en", on_project_icon=None,
+                 on_server_label=None, **kwargs):
         self.server = server
-        self.http = T3Http(server.url, server.token)
+        # [view].language of the deck; a config reload rebuilds the connector.
+        self._lang = language
+        self.client = client or T3Client(server.url, server.token)
         self._on_snapshot = on_snapshot
         self._on_connection = on_connection
         self._on_result = on_result or (lambda *args: None)
         self._on_error = on_error or (lambda *args: None)
+        self._on_project_icon = on_project_icon
+        # (server_id, label|None): the descriptor's display name, reported
+        # once per change (outside the delivery lock) as a tile-tag fallback.
+        self._on_server_label = on_server_label
+        self.server_label = None  # sanitized descriptor label, see descriptor_label()
+        self._reported_label = None
+        # (workspaceRoot, faviconPath) -> (icon hash or "", checked at): the
+        # favicon T3 resolves for a project, fetched outside the lock.
+        self._icons = {}
+        self._projects = {}
         self.states = {}
-        self._threads = {}
+        # tid -> (revision, capabilities, actions, shell, detail) BEFORE any
+        # read-only lock; send() validates a press against it.
+        self._offers = {}
+        self._cache = {}  # tid -> (detail cache key, detail)
         self._epoch = uuid.uuid4().hex
-        self._consumed = set()
-        self._uncertain = {}
+        self._features = None
+        self._uncertain = {}  # tid -> revision whose delivery outcome is unknown
+        self._deliveries = {}  # delivery key -> commands with their commandIds
+        self._operate_denied = False
+        self._faulty = set()  # malformed thread ids already logged
         self._lock = asyncio.Lock()
         self._stop = False
+        self._clock = time.time
+        self._retry_delay = 1.0
+        self._interval = 1.0
         self.last_connect_error = None
         # /health diagnostics, same shape as the herdr Connector.health(): a
         # T3 server that never answered (configured but not running) is not
         # "down", so the window stays quiet about it (ever_connected=False).
+        # Any answer counts (incompatible descriptor, HTTP 4xx), so those
+        # errors stay visible while connected stays False.
         self._connected = False
         self._ever_connected = False
         self._since_ms = int(time.time() * 1000)
         self._attempt = 0
-        self._features = None
-        self._environment_id = None
-        # Config key first ([[servers]] desktop_read_state), env as the fallback
-        # that older launch units still set.
-        read_state = bool(getattr(server, "desktop_read_state", False)) or (
-            os.environ.get("HERDECK_T3_DESKTOP_READ_STATE") == "1"
-        )
-        self._desktop_seen = (DesktopSeen(os.environ.get("HERDECK_T3_DESKTOP_STORAGE"))
-                              if read_state else None)
-        self._cache = {}
-        config = Path(os.environ.get("HERDECK_CONFIG", str(Path.home() / ".config/herdeck/config.toml")))
-        self._seen = kwargs.get("seen_store") or SeenStore(config.parent / "t3-seen", server.id)
+        _warn_read_state(server)
 
     def stop(self):
         self._stop = True
@@ -319,81 +183,129 @@ class T3Connector:
             self._since_ms = int(time.time() * 1000)
         self._on_connection(self.server.id, up)
 
-    async def refresh(self, force=None):
+    def _malformed(self, tid, exc):
+        if tid not in self._faulty:
+            self._faulty.add(tid)
+            log.warning("T3 thread %s is malformed (%s); shown read-only or skipped",
+                        tid, type(exc).__name__)
+
+    # --- reads ---------------------------------------------------------------
+
+    async def refresh(self, force: str | None = None):
         if self._features is None:
-            descriptor = await asyncio.to_thread(self.http.get, "/.well-known/t3/environment")
-            from .t3_actions import negotiated_features
-            self._features = negotiated_features(descriptor)
-            self._environment_id = descriptor.get("environmentId")
-        shell = await asyncio.to_thread(self.http.get, "/api/orchestration/shell")
-        validate_shell(shell)
-        if self._desktop_seen:
-            await asyncio.to_thread(self._desktop_seen.refresh)
-        projects = {p["id"]: p for p in shell["projects"]}
-        threads, states = {}, {}
-        now = time.monotonic()
-        for summary in shell["threads"]:
-            tid = summary["id"]
-            signature = json.dumps(summary, sort_keys=True)
-            cached = self._cache.get(tid)
-            stale = False
+            descriptor = await asyncio.to_thread(self.client.descriptor)
+            self._ever_connected = True  # it answered, even if incompatible
             try:
-                if force == tid or not cached or cached[0] != signature or now - cached[1] >= 15:
-                    if summary.get("deletedAt") or summary.get("archivedAt"):
-                        detail = {}
-                    else:
-                        response = await asyncio.to_thread(self.http.get,
-                            "/api/orchestration/threads/" + quote(tid, safe="") + "?turnLimit=3")
-                        detail = response["thread"]
-                        if not isinstance(detail, dict) or detail.get("id") != tid:
-                            raise T3Error("Unsupported T3 thread contract")
-                    self._cache[tid] = (signature, now, detail)
-                else:
-                    detail = cached[2]
-            except T3Error as exc:
-                if exc.code in (401, 403):
-                    raise
-                if exc.code == 404:
-                    self._cache.pop(tid, None)
-                    continue
-                detail, stale = (cached[2] if cached else {}), True
-            except (KeyError, TypeError, ValueError):
-                detail, stale = (cached[2] if cached else {}), True
-            # Summary is fresher than cached detail and owns lifecycle/attention.
-            t = {**detail, **summary}
-            threads[tid] = t
-            local_seen = self._seen.get(tid)
-            desktop_ready = self._desktop_seen and not self._desktop_seen.last_error and self._environment_id
-            if desktop_ready:
-                # Match T3's hasUnseenCompletion: a never-visited thread is not
-                # unread. This applies only to a successfully read current UI
-                # record; missing/unreadable storage must not hide completions.
-                local_seen = self._desktop_seen.get(self._environment_id, tid)
-                if local_seen is None:
-                    local_seen = (t.get("latestTurn") or {}).get("completedAt")
-            states[tid] = thread_state(self.server.id, t, projects, self._epoch,
-                acknowledged=local_seen, features=self._features)
-            if desktop_ready:
-                # Desktop read/unread owns the marker while this opt-in bridge
-                # is healthy; do not offer a competing local acknowledgment.
-                states[tid].capabilities = tuple(a for a in states[tid].capabilities if a != "acknowledge")
-                states[tid].backend_actions = [a for a in states[tid].backend_actions if a["id"] != "acknowledge"]
-            elif self._desktop_seen and self._desktop_seen.last_error:
-                states[tid].preview = self._desktop_seen.last_error + "\n" + states[tid].preview
-            uncertain = self._uncertain.get(tid)
-            if uncertain and not stale and _observed_effect(t, uncertain):
-                self._uncertain.pop(tid)
-            if stale or tid in self._uncertain:
-                s = states[tid]
-                s.capabilities, s.backend_actions = ("read",), []
-                s.backend_revision += ":stale" if stale else ":uncertain"
-                s.progress = "Stale detail" if stale else "Delivery uncertain — inspect T3"
-                s.preview = s.progress + ". Controls disabled. Inspect T3.\n" + s.preview
-                if stale:
-                    s.state_labels = {s.status.value: "STALE"}
-        self._cache = {k: v for k, v in self._cache.items() if k in threads}
-        self._threads, self.states = threads, states
+                features = negotiate(descriptor)
+            except Incompatible as exc:
+                self.last_connect_error = str(exc)
+                raise _IncompatibleServer(str(exc)) from None
+            self._features = features
+            self.server_label = descriptor_label(descriptor)
+        shell = await asyncio.to_thread(self.client.shell)
+        projects = {p["id"]: p for p in shell["projects"]
+                    if isinstance(p, dict) and isinstance(p.get("id"), str)}
+        self._projects = projects
+        now = self._clock()
+        states, offers = {}, {}
+        entries = [(s, False) for s in shell["threads"]] + [(s, True) for s in shell["archivedThreads"]]
+        for summary, archived in entries:
+            tid = summary.get("id") if isinstance(summary, dict) else None
+            if not isinstance(tid, str) or not tid:
+                self._malformed("<no id>", KeyError("id"))
+                continue
+            if tid in states:
+                continue
+            try:
+                if not published(summary, now, archived):
+                    continue  # a subagent child: listed on its parent's tile
+            except _MALFORMED as exc:
+                self._malformed(tid, exc)
+            fetched = await self._detail(tid, summary, archived, now, force)
+            if fetched is None:
+                continue  # 404: the thread is gone
+            detail, stale = fetched
+            built = self._build(tid, summary, detail, projects, archived, now, stale)
+            if built is not None:
+                states[tid], offers[tid] = built
+                states[tid].project_icon = self._icon_hash(projects.get(summary.get("projectId")))
+        self._cache = {k: v for k, v in self._cache.items() if k in states}
+        self._uncertain = {k: v for k, v in self._uncertain.items() if k in states}
+        self.states, self._offers = states, offers
         self._on_snapshot(self.server.id, list(states.values()))
+
+    async def _detail(self, tid, summary, archived, now, force):
+        """(detail, stale), or None when T3 says the thread no longer exists."""
+        cached = self._cache.get(tid)
+        try:
+            key = json.dumps([summary.get("updatedAt"), summary.get("pendingRuntimeRequest"),
+                              summary.get("hasActionableProposedPlan"), summary.get("status")],
+                             sort_keys=True)
+            active = lifecycle(summary, now, archived) == "active"
+        except _MALFORMED as exc:
+            self._malformed(tid, exc)
+            return (cached[1] if cached else {}), True
+        if not (force == tid or (active and (cached is None or cached[0] != key))):
+            return (cached[1] if cached else {}), False
+        try:
+            detail = await asyncio.to_thread(self.client.thread_detail, tid)
+            plan = active_plan(detail)
+            if plan and not plan["markdown"] and plan.get("detailInTurnItem"):
+                # /bounded left the plan text in a turn item it did not include.
+                detail = await asyncio.to_thread(self.client.full_detail, tid)
+        except T3Error as exc:
+            if exc.code in (401, 403):
+                raise
+            if exc.code == 404:
+                self._cache.pop(tid, None)
+                return None
+            return (cached[1] if cached else {}), True
+        except _MALFORMED as exc:
+            self._malformed(tid, exc)
+            return (cached[1] if cached else {}), True
+        self._cache[tid] = (key, detail)
+        return detail, False
+
+    def _build(self, tid, summary, detail, projects, archived, now, stale):
+        """(published state, offer) for one thread; None if it cannot be mapped.
+
+        A malformed thread degrades to a read-only tile (or is skipped) and
+        never fails the refresh of the other threads.
+        """
+        features = self._features
+        try:
+            state = thread_state(self.server.id, summary, detail, projects, self._epoch,
+                                 features=features, now=now, archived=archived, lang=self._lang)
+            actions = thread_actions(state, summary, detail, features, now)
+            caps = capabilities(state, summary, actions)
+            self._faulty.discard(tid)
+        except _MALFORMED as exc:
+            self._malformed(tid, exc)
+            try:
+                state = thread_state(self.server.id, summary, {}, projects, self._epoch,
+                                     features=features, now=now, archived=archived, lang=self._lang)
+            except _MALFORMED:
+                return None
+            actions, caps, stale = [], ("read",), True
+        offer = (state.backend_revision, caps, actions, summary, detail)
+        state.backend_actions, state.capabilities = actions, caps
+        uncertain = self._uncertain.get(tid)
+        if uncertain is not None and not stale and uncertain != state.backend_revision:
+            # The thread changed: the command landed, or the user may act anew.
+            # A revision built from a stale detail is no evidence either way.
+            self._uncertain.pop(tid)
+            uncertain = None
+        if stale or uncertain is not None:
+            state.capabilities, state.backend_actions = ("read",), []
+            state.backend_revision += ":stale" if stale else ":uncertain"
+            state.progress = tr(self._lang, "t3.stale" if stale else "t3.uncertain")
+            state.preview = tr(self._lang, "t3.read_only", reason=state.progress) + "\n" + state.preview
+            if stale:
+                state.state_labels = {state.status.value: "STALE"}
+        if self._operate_denied:
+            state.capabilities, state.backend_actions = ("read",), []
+            state.preview = tr(self._lang, "t3.operate_denied") + "\n" + state.preview
+        return state, (offer if not stale else None)
 
     async def run(self):
         online = False
@@ -404,76 +316,179 @@ class T3Connector:
                 self.last_connect_error = None
                 self._set_connected(True)
                 online = True
-            except (T3Error, KeyError, TypeError, ValueError):
-                self.last_connect_error = "T3 unavailable or incompatible; check connection and credential"
+                self._report_label()
+                await self._sync_icons()
+            except (T3Error, *_MALFORMED) as exc:
+                if getattr(exc, "code", None) is not None:
+                    self._ever_connected = True  # an HTTP answer, not a dead transport
+                self.last_connect_error = _connect_error(exc)
                 if online:
                     self._epoch = uuid.uuid4().hex
                     self._features = None
                     self._cache.clear()
                 online = False
                 self._set_connected(False)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self._interval)
         self._connected = False
         self._on_connection(self.server.id, False)
+
+    def _report_label(self):
+        if self._on_server_label is None or self.server_label == self._reported_label:
+            return
+        self._reported_label = self.server_label
+        self._on_server_label(self.server.id, self.server_label)
+
+    # --- project favicons ---------------------------------------------------
+
+    @staticmethod
+    def _icon_key(project):
+        root = project.get("workspaceRoot") if isinstance(project, dict) else None
+        if not isinstance(root, str) or not root:
+            return None
+        path = project.get("faviconPath")
+        return root, path if isinstance(path, str) and path else None
+
+    def _icon_hash(self, project) -> str:
+        key = self._icon_key(project)
+        entry = self._icons.get(key) if key else None
+        return entry[0] if entry else ""
+
+    async def _sync_icons(self):
+        """Fetch the favicon of each project whose entry is missing or due.
+
+        Runs between refreshes without the lock, so presses never wait on it.
+        The bytes go to the runtime's icon store before a tile names the hash
+        (the next refresh), and any failure only leaves the monogram."""
+        if self._on_project_icon is None:
+            return
+        keys = {k for k in map(self._icon_key, self._projects.values()) if k}
+        self._icons = {k: v for k, v in self._icons.items() if k in keys}
+        now = self._clock()
+        for key in sorted(keys, key=lambda k: (k[0], k[1] or "")):
+            if self._stop:
+                return
+            entry = self._icons.get(key)
+            if entry and now - entry[1] < (_ICON_RECHECK_S if entry[0] else _ICON_RETRY_S):
+                continue
+            try:
+                found = await self.client.project_favicon(*key)
+                digest = ""
+                if found is not None:
+                    mime, data = found
+                    digest = icon_hash(data)
+                    self._on_project_icon(self.server.id, ProjectIcon(self.server.id, digest, mime, data))
+            except (T3Error, *_MALFORMED):
+                # Never a connection failure: an odd asset answer only costs the
+                # icon, and a transient failure keeps the icon already shown.
+                digest = entry[0] if entry else ""
+            self._icons[key] = (digest, now)
+
+    # --- delivery ------------------------------------------------------------
 
     async def send(self, msg):
         async with self._lock:
             req, tid = msg.get("req"), msg.get("pane_id")
             try:
                 await self.refresh(force=tid)
-                if msg["type"] == "list":
+                if msg.get("type") == "list":
                     return
                 state = self.states.get(tid)
                 if state is None:
                     raise T3Error("T3 conversation is no longer available")
-                if msg["type"] == "read":
+                if msg.get("type") == "read":
                     self._on_result(req, {"pane_id": tid, "text": state.preview})
                     return
-                if msg["type"] != "backend_action":
+                if msg.get("type") != "backend_action":
                     raise T3Error("Unsupported T3 action; use semantic controls")
-                if msg.get("revision") != state.backend_revision or state.backend_revision in self._consumed:
-                    raise T3Error("Stale or already submitted T3 action")
-                action = msg.get("action")
-                if action not in state.capabilities:
-                    raise T3Error("T3 action is not available")
-                t = self._threads[tid]
-                command = {"commandId": uuid.uuid4().hex, "threadId": tid,
-                           "createdAt": datetime.now(UTC).isoformat()}
-                if action == "stop":
-                    command.update(type="thread.turn.interrupt", turnId=t["session"]["activeTurnId"])
-                elif action == "continue":
-                    text = msg.get("text")
-                    if not isinstance(text, str) or not text.strip() or len(text) > 4096:
-                        raise T3Error("T3 message must contain 1–4096 characters")
-                    command.update(type="thread.turn.start", runtimeMode=t["runtimeMode"],
-                        interactionMode=t["interactionMode"], modelSelection=t["modelSelection"],
-                        message={"messageId": uuid.uuid4().hex, "role": "user", "text": text, "attachments": []})
-                else:
-                    match = next((a for a in state.backend_actions
-                        if a["id"] == action and a["payload"] == msg.get("payload")), None)
-                    if match is None:
-                        raise T3Error("T3 request or answer is stale")
-                    if action == "acknowledge":
-                        self._seen.mark(tid, state.completed_at)
-                        await self.refresh(force=tid)
-                        self._on_result(req, {"ok": True, "accepted": True, "local": True})
-                        return
-                    command.update(semantic_command(action, match["payload"], t))
-                self._consumed.add(state.backend_revision)
-                try:
-                    await asyncio.to_thread(self.http.dispatch, command)
-                except T3Error as exc:
-                    # An explicit client rejection did not accept the command.
-                    # Request timeout (408) can still leave delivery ambiguous.
-                    if exc.code is not None and 400 <= exc.code < 500 and exc.code != 408:
-                        self._consumed.discard(state.backend_revision)
-                        self._on_result(req, {"ok": False, "rejected": True, "message": str(exc)})
-                        return
-                    self._uncertain[tid] = command
-                    self._on_result(req, {"ok": False, "uncertain": True,
-                        "message": "T3 delivery uncertain; inspect the conversation before retrying"})
-                    return
-                self._on_result(req, {"ok": True, "sent": True, "accepted": True})
-            except (T3Error, KeyError, TypeError, ValueError) as exc:
+                commands = self._commands(tid, msg)
+            except (T3Error, *_MALFORMED) as exc:
                 message = str(exc) if isinstance(exc, T3Error) else "Unsupported T3 contract"
                 self._on_result(req, {"ok": False, "skipped": True, "message": message})
+                return
+            await self._deliver(req, tid, *commands)
+
+    def _commands(self, tid, msg):
+        """Validate a press against the fresh offer; (key, revision, commands)."""
+        if self._operate_denied:
+            raise T3Error("T3 credential lacks orchestration:operate; actions disabled")
+        offer = self._offers.get(tid)
+        if offer is None:
+            raise T3Error("T3 detail is stale; controls disabled")
+        revision, caps, actions, shell, detail = offer
+        action = msg.get("action")
+        if action not in caps:
+            raise T3Error("T3 action is not available")
+        if msg.get("revision") != revision:
+            raise T3Error("Stale or already submitted T3 action")
+        payload = {}
+        if action not in ("stop", "continue"):
+            wanted = json.dumps(msg.get("payload"), sort_keys=True)
+            # decline and cancel share the id "deny": match by id AND payload.
+            match = next((a for a in actions if a["id"] == action
+                          and json.dumps(a["payload"], sort_keys=True) == wanted), None)
+            if match is None:
+                raise T3Error("T3 request or answer is stale")
+            payload = match["payload"]
+        text = msg.get("text") if action == "continue" else None
+        key = (tid, revision, action, json.dumps(payload, sort_keys=True), text)
+        commands = self._deliveries.get(key)
+        if tid in self._uncertain and commands is None:
+            raise T3Error(UNCERTAIN)
+        if commands is None:
+            now_iso = datetime.fromtimestamp(self._clock(), UTC).isoformat()
+            try:
+                built = build_commands(action, payload, shell, detail, self._features,
+                                       text=text, now_iso=now_iso)
+            except ValueError as exc:
+                raise T3Error(str(exc)) from None
+            commands = [{**c, "commandId": str(uuid.uuid4())} for c in built]
+            self._deliveries[key] = commands
+            while len(self._deliveries) > _DELIVERY_MEMORY:
+                del self._deliveries[next(iter(self._deliveries))]
+        return key, revision, commands
+
+    async def _dispatch(self, commands):
+        """("accepted"|"rejected"|"uncertain", reason). Stops at the first failure."""
+        for command in commands:
+            for attempt in (1, 2):
+                try:
+                    await self.client.dispatch(command)
+                    break
+                except T3Rejected as exc:
+                    if attempt == 2 and getattr(exc, "handshake", False):
+                        # The retry never reached the command, and attempt 1
+                        # is unknown: the first may have run.
+                        return "uncertain", None
+                    return "rejected", exc.reason
+                except Exception as exc:  # any other failure: the outcome is unknown
+                    if getattr(exc, "code", None) == 401 and attempt == 1:
+                        # The ticket was refused: this command was never sent.
+                        return "rejected", CREDENTIAL_INVALID
+                    if attempt == 2:
+                        return "uncertain", None
+                    await asyncio.sleep(self._retry_delay)
+        return "accepted", None
+
+    async def _deliver(self, req, tid, key, revision, commands):
+        outcome, reason = await self._dispatch(commands)
+        if outcome == "uncertain":
+            self._uncertain[tid] = revision
+            result = {"ok": False, "uncertain": True, "message": UNCERTAIN}
+        elif outcome == "accepted":
+            # Keep the commands: a repeat press on the same revision (T3 has
+            # not published the effect yet) replays them instead of minting
+            # new ids, so e.g. a double-pressed reply is sent once.
+            self._uncertain.pop(tid, None)
+            result = {"ok": True, "sent": True, "accepted": True}
+        else:
+            self._deliveries.pop(key, None)  # rejected ids fail again on replay
+            if reason == OPERATE_DENIED:
+                self._operate_denied = True
+            result = {"ok": False, "rejected": True, "message": reason}
+        self._on_result(req, result)
+        try:
+            # Only called from send(), which holds self._lock (asyncio.Lock is
+            # not reentrant), so this refresh cannot race run().
+            await self.refresh(force=tid)
+        except (T3Error, *_MALFORMED):
+            pass  # the poll loop reports connection problems

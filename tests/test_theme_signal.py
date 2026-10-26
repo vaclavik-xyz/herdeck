@@ -113,7 +113,7 @@ def test_waiting_shows_holder_label_and_time(provider, log):
     drawn = texts(log)
     assert "CI" in drawn and "12m" in drawn
     # a long holder label stays whole; the time gives way
-    signal.THEME.agent_tile(agent("waiting", status_text="REVIEW +1"), ctx, None)
+    signal.THEME.agent_tile(agent("waiting", wait_reason="REVIEW +1"), ctx, None)
     drawn = texts(log)
     assert "REVIEW +1" in drawn and "12m" not in drawn
 
@@ -185,7 +185,7 @@ def test_waiting_keeps_its_subagents_when_they_fit(provider, log):
     signal.THEME.agent_tile(agent("waiting", subagents=2), ctx, None)
     assert {"12m", "CI", "+2"} <= set(texts(log))
     # a long holder label leaves no room for the time; "+2" still shows
-    signal.THEME.agent_tile(agent("waiting", status_text="REVIEW +1", subagents=2), ctx, None)
+    signal.THEME.agent_tile(agent("waiting", wait_reason="REVIEW +1", subagents=2), ctx, None)
     drawn = texts(log)
     assert "REVIEW +1" in drawn and "+2" in drawn and "12m" not in drawn
 

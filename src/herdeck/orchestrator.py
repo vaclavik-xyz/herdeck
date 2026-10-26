@@ -57,6 +57,30 @@ def server_accent(server_id: str, accents: list[str] | None = None) -> str | Non
     return palette[digest[0] % len(palette)]
 
 
+def server_tag(
+    server_id: str,
+    backend: str,
+    servers=(),
+    descriptor_labels: dict[str, str] | None = None,
+) -> str:
+    """The short server name an agent tile shows with ``tile_fields`` "server".
+
+    A configured ``[[servers]].label`` wins. Otherwise a T3 server's own
+    descriptor label (e.g. "Jupiter-M4mini") is used, but only when another
+    server of the same backend is configured — that is when "T3" alone stops
+    telling the tiles apart. Else the backend name, as before."""
+    same_backend = 0
+    for server in servers:
+        if server.id == server_id and server.label:
+            return server.label
+        if server.backend == backend:
+            same_backend += 1
+    fallback = (descriptor_labels or {}).get(server_id)
+    if fallback and same_backend > 1:
+        return fallback
+    return "T3" if backend == "t3" else "HERDR"
+
+
 def _looks_like_approve_always(label: str) -> bool:
     normalized = label.lower().replace("\u2019", "'")
     return any(hint in normalized for hint in _APPROVE_ALWAYS_HINTS)
@@ -178,6 +202,9 @@ class Orchestrator:
         # (status, started at, the bridge's status_since_ms it came from or None).
         self._since: dict[AgentKey, tuple[Status, float, int | None]] = {}
         self._down: set[str] = set()
+        # server id -> the server's self-reported display name (T3 descriptor
+        # label), a tile-tag fallback; see server_tag().
+        self._server_labels: dict[str, str] = {}
         self._down_since: dict[str, float] = {}  # server id -> when it went down
         # Servers seen connected at least once. A configured backend that never
         # came up (kept in config but not running, e.g. T3) is not announced
@@ -391,6 +418,27 @@ class Orchestrator:
             if self._pending_confirm[1].server_id == server_id:
                 self._pending_confirm = None
 
+    def set_server_label(self, server_id: str, label: str | None) -> bool:
+        """Record a server's self-reported display name (None forgets it).
+        True when it changed (the tiles need a re-render)."""
+        if label:
+            changed = self._server_labels.get(server_id) != label
+            self._server_labels[server_id] = label
+        else:
+            changed = self._server_labels.pop(server_id, None) is not None
+        return changed
+
+    def server_display_name(self, server_id: str) -> str:
+        """How deck text names a server: its configured label, else its id."""
+        for server in self.config.servers:
+            if server.id == server_id and server.label:
+                return server.label
+        return server_id
+
+    def server_display_tag(self, server_id: str, backend: str) -> str:
+        """The tile tag for ``server_id`` (see server_tag())."""
+        return server_tag(server_id, backend, self.config.servers, self._server_labels)
+
     def _server_count(self) -> int:
         """Servers the overview panel accounts for: the configured ones plus any
         unknown id reported down (so a stray id can never read as a partial)."""
@@ -517,11 +565,14 @@ class Orchestrator:
         confirm_for = set(safety.require_confirm_for)
         out: list[dict] = []
         if agent.backend == "t3":
-            for option in agent.backend_actions:
+            for index, option in enumerate(agent.backend_actions):
                 if option["id"] == "approve_always" and not safety.approve_always:
                     continue
                 out.append({
-                    "key": option["id"],
+                    # Several T3 options share an action id (every answer is
+                    # "answer", decline/cancel are "deny"), so the key is the
+                    # option's index in ``backend_actions``.
+                    "key": str(index),
                     "label": option["label"],
                     "id": option["id"],
                     "kind": "backend",
@@ -922,7 +973,11 @@ class Orchestrator:
                 s = shown[i]
                 phase = self._phase if s.status is Status.WORKING else None
                 down = s.key.server_id in self._down
-                tag = ("T3" if s.backend == "t3" else "HERDR") if show_server_tags else None
+                tag = (
+                    self.server_display_tag(s.key.server_id, s.backend)
+                    if show_server_tags
+                    else None
+                )
                 # A T3 thread takes the place of a terminal tab. Give its title
                 # the whole secondary line by default; explicit layouts still win.
                 agent_secondary = secondary_tokens
@@ -956,6 +1011,8 @@ class Orchestrator:
                         if "status" in fields
                         else None,
                         time_text=self._elapsed_text(s.key) if "time" in fields else None,
+                        # the reason shares the time line, so it hides with it
+                        show_wait_reason="time" in fields,
                         pinned=s.key in self.pins.values(),
                         server_tag=tag,
                         server_accent=accent,
@@ -1038,6 +1095,7 @@ class Orchestrator:
             down_for=self._down_for() if all_down else "",
             left=len(self._triage_queue()) if sent else None,
             queue=self._panel_queue(),
+            names={s.id: s.label for s in self.config.servers if s.label},
         )
         return RenderState(tiles, panel)
 
@@ -1107,7 +1165,7 @@ class Orchestrator:
         if target is not None and len(self.config.overview_order) > 1:
             # With several servers the new agent's destination is not obvious:
             # say where it will start instead of silently using the first one.
-            lines.append(self._tr("launch_on", server=target))
+            lines.append(self._tr("launch_on", server=self.server_display_name(target)))
         panel = PanelView(
             self._tr("new_agent_title"), lines, headline=self._tr("pick_type"), kind="menu"
         )

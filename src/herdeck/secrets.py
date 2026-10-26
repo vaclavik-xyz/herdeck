@@ -7,6 +7,8 @@ config editor writes to. TOML never holds secret values — only the env-var nam
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 
 SERVICE = "herdeck"
 
@@ -74,3 +76,26 @@ def peek_keychain(name: str) -> str | None:
     backend errors — it RAISES — so a caller can distinguish 'missing' (None) from
     'unreadable' (exception) and never erase a token it failed to snapshot."""
     return _keyring().get_password(_service(), name)
+
+
+def write_token_file(path: Path, token: str) -> None:
+    """Atomically write ``token`` to ``path`` with mode 0600 (the runtime
+    refuses a token file others can read). Creates the parent directory.
+
+    A symlinked ``path`` keeps its link: the file it points to is replaced,
+    since ``os.replace`` onto the link itself would swap it for a regular file."""
+    path = Path(os.path.realpath(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".")
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, (token + "\n").encode())
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(tmp, path)
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        Path(tmp).unlink(missing_ok=True)
+        raise

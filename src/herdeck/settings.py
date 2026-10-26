@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import tomllib
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -238,7 +239,7 @@ def _token_sources(raw: dict) -> tuple[str | None, Path | None]:
     return env, path
 
 
-def _read_token_file(server_id: str, path: Path) -> str | None:
+def read_token_file(server_id: str, path: Path) -> str | None:
     """The stripped token in ``path``; None when the file does not exist.
 
     Same rules as the bridge's own token file: a regular file readable by its
@@ -289,7 +290,7 @@ def resolve_server_token(raw: dict) -> tuple[str, str]:
     if env and os.environ.get(env):
         return os.environ[env], "env"
     if path is not None:
-        token = _read_token_file(sid, path)
+        token = read_token_file(sid, path)
         if token:
             return token, "file"
     if env:
@@ -319,6 +320,8 @@ def _server_config(raw: dict) -> ServerConfig:
     backend = raw.get("backend", "herdr")
     if backend not in ("herdr", "t3"):
         raise ConfigError("unsupported server backend")
+    # Obsolete since T3 orchestration protocol 2 (read state lives on the
+    # server); still validated so existing configs keep loading. No behaviour.
     desktop_read_state = raw.get("desktop_read_state", False)
     if not isinstance(desktop_read_state, bool):
         raise ConfigError(f"server '{raw['id']}': desktop_read_state must be true or false")
@@ -326,13 +329,74 @@ def _server_config(raw: dict) -> ServerConfig:
         raise ConfigError(
             f"server '{raw['id']}': desktop_read_state is an option of T3 servers only"
         )
+    # T3 only: SSH target (user@host) that issues/renews this server's token
+    # (t3_setup --renew-all). Unused by the runtime; validated so a typo or an
+    # injected option never reaches ssh.
+    issuer_ssh = raw.get("issuer_ssh")
+    if issuer_ssh is not None:
+        if backend != "t3":
+            raise ConfigError(f"server '{raw['id']}': issuer_ssh is an option of T3 servers only")
+        from .t3_remote import validate_ssh_target
+        try:
+            validate_ssh_target(issuer_ssh)
+        except ValueError:
+            raise ConfigError(f"server '{raw['id']}': issuer_ssh must be user@host") from None
     if backend == "t3":
         from .t3 import T3Http
         try:
             T3Http(raw["url"], token)
         except ValueError as exc:
             raise ConfigError(str(exc)) from None
-    return ServerConfig(raw["id"], raw["url"], token, backend, desktop_read_state)
+    return ServerConfig(
+        raw["id"], raw["url"], token, backend, desktop_read_state,
+        label=_server_label(raw), issuer_ssh=issuer_ssh,
+    )
+
+
+# A server label is a tile tag: a few characters that fit the bottom band of a
+# 196px tile next to the pin (longer text would only be ellipsized away).
+SERVER_LABEL_MAX = 16
+
+
+def _server_label(raw: dict) -> str | None:
+    """The validated, stripped ``label`` of a ``[[servers]]`` entry (None when
+    absent or blank)."""
+    value = raw.get("label")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"server '{raw.get('id')}': label must be a string")
+    label = value.strip()
+    # Cc covers C0/C1 controls and DEL; Cf covers bidi overrides (U+202E) and
+    # other invisible format characters that would garble or disguise the tag.
+    # Same policy as t3.descriptor_label, but a user's config is rejected
+    # rather than silently stripped.
+    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in label):
+        raise ConfigError(
+            f"server '{raw.get('id')}': label must not contain control or format characters"
+        )
+    if len(label) > SERVER_LABEL_MAX:
+        raise ConfigError(
+            f"server '{raw.get('id')}': label is longer than {SERVER_LABEL_MAX} characters"
+        )
+    return label or None
+
+
+def _check_unique_labels(raw_servers: list) -> None:
+    """Two ``[[servers]]`` entries must not share a label (case-insensitive,
+    after trimming): the label is how the deck tells servers apart."""
+    owners: dict[str, str] = {}
+    for raw in raw_servers:
+        value = raw.get("label") if isinstance(raw, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            continue
+        key = value.strip().casefold()
+        if key in owners:
+            raise ConfigError(
+                f"servers '{owners[key]}' and '{raw.get('id')}' have the same label "
+                f"'{value.strip()}'"
+            )
+        owners[key] = str(raw.get("id"))
 
 
 def _theme_config(raw: dict | None) -> ThemeConfig:
@@ -706,6 +770,7 @@ def _build_config(
         if sid not in servers_by_id:
             raise ConfigError(f"unknown server '{sid}'")
         servers.append(_server_config(servers_by_id[sid]))
+    _check_unique_labels(data.get("servers", []))
 
     deck = merged.get("deck") or {}
     grid = _parse_grid(deck.get("grid", "5x3"))

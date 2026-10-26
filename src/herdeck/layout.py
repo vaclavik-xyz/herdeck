@@ -6,7 +6,15 @@ import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 
-from .driver.base import PanelAgent, PanelGauge, PanelStat, PanelView, ThemeEnv, TileView
+from .driver.base import (
+    PanelAgent,
+    PanelGauge,
+    PanelStat,
+    PanelView,
+    ThemeEnv,
+    TileView,
+    time_line,
+)
 from .i18n import tr
 from .model import AgentState, Status
 from .project_icons import ProjectIconStore, tile_icon_fields
@@ -66,6 +74,7 @@ def agent_tile_view(
     project_icons: ProjectIconStore | None = None,
     spinner: int | None = None,
     time_text: str | None = None,
+    show_wait_reason: bool = True,
     pinned: bool = False,
     server_tag: str | None = None,
     server_accent: str | None = None,
@@ -95,6 +104,7 @@ def agent_tile_view(
         branch=branch,
         status_text=status_text,
         time_text=time_text,
+        wait_reason=tile_wait_reason(state) if show_wait_reason else "",
         pinned=pinned,
         server_tag=server_tag,
         server_accent=server_accent,
@@ -125,7 +135,12 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
     """
     parts: list[str] = []
     for token in tokens:
-        if token == "project":
+        if state.no_project and token in ("project", "repo", "tab", "title"):
+            # A project-less T3 thread: its title is the meaningful name, so it
+            # takes the project's (headline) place and the title/tab line
+            # shows the muted "No project" label instead of repeating it.
+            value = state.title if token in ("project", "repo") else state.project
+        elif token == "project":
             value = project_name(state)
         elif token == "repo":
             # T3 projects have editable display names; workspaceRoot is a path,
@@ -154,7 +169,7 @@ def compose_line(state: AgentState, tokens: list[str]) -> str:
             value = state.metadata.get(token[1:], "")
         else:
             value = ""
-        if value:
+        if value and not (state.no_project and value in parts):
             parts.append(value)
     return " · ".join(parts)
 
@@ -307,6 +322,7 @@ def panel_overview(
     down_for: str = "",
     left: int | None = None,
     queue: list[PanelAgent] | None = None,
+    names: dict[str, str] | None = None,
 ) -> PanelView:
     """The overview status panel: calm counts, NEEDS YOU, or OFFLINE.
 
@@ -321,20 +337,21 @@ def panel_overview(
     bridge's status change lags the answer), defaulting to ``counts.blocked``.
     ``queue`` (blocked agents, longest-waiting first) and the counts ride
     along for deck themes (``kind``/``queue``/``counts``); classic ignores them.
+    ``names`` maps a server id to the name shown for it (its configured label).
     """
     colors = colors or {}
+    names = names or {}
     theme_data = {"queue": list(queue or []), "counts": asdict(counts)}
     page = (page_index, page_count) if page_count > 1 else None
     partial = bool(down) and servers is not None and len(down) < servers
     note = ""
-    if partial:
-        note = (
-            tr(lang, "server_offline", name=next(iter(down)))
-            if len(down) == 1
-            else tr(lang, "servers_offline", n=len(down))
-        )
+    if partial and len(down) == 1:
+        (sid,) = down
+        note = tr(lang, "server_offline", name=names.get(sid, sid))
+    elif partial:
+        note = tr(lang, "servers_offline", n=len(down))
     if down and not partial:
-        sub = ", ".join(sorted(down))
+        sub = ", ".join(sorted(names.get(sid, sid) for sid in down))
         if counts.blocked:
             # one dead server must not hide that agents are waiting for input
             sub = f"{sub} · {tr(lang, 'blocked_count', n=counts.blocked)}"
@@ -685,11 +702,30 @@ def _short_status_label(text: str) -> str:
     return " ".join(kept.split()).upper()[:12]
 
 
+# The reasons the T3 backend reports, cut to fit the tile's time line next to
+# the elapsed time ("SUB · 12m"); "SUBAGENT · 12m" does not fit.
+_WAIT_REASON_SHORT = {"SUBAGENT": "SUB", "COMMAND": "CMD", "MONITOR": "MON", "BACKGROUND": "BG"}
+
+
+def tile_wait_reason(agent: AgentState) -> str:
+    """Why a WAITING agent waits, short: herdeck's own `waiting_on` holder
+    label, else the backend's native waiting label (T3: CI, SUBAGENT, …)."""
+    if agent.status is not Status.WAITING:
+        return ""
+    reason = (_short_status_label(agent.waiting_on)
+              or _short_status_label(agent.state_labels.get(Status.WAITING.value, "")))
+    return _WAIT_REASON_SHORT.get(reason, reason)
+
+
+def tile_time_text(agent: AgentState, elapsed: str) -> str:
+    return time_line(tile_wait_reason(agent), elapsed)
+
+
 def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) -> str:
     """The agent tile's status word, in strict precedence order: the server
-    being down, herdeck's own explicit `waiting_on` holder label, herdr's
-    native per-status label (0.8.2+, what herdr's sidebar shows), and finally
-    the generic translated status word.
+    being down, the generic word for WAITING (the reason goes on the line
+    below, see `tile_time_text`), herdr's native per-status label (0.8.2+,
+    what herdr's sidebar shows), and finally the generic translated word.
 
     Shared by every agent-tile path so the deck, the window and the Elgato
     surface can't drift apart on which label wins.
@@ -697,9 +733,7 @@ def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) ->
     if down:
         return tr(lang, "status.offline")
     if agent.status is Status.WAITING:
-        held = _short_status_label(agent.waiting_on)
-        if held:
-            return held
+        return tr(lang, "status.waiting")
     native = _short_status_label(agent.state_labels.get(agent.status.value, ""))
     if native:
         return native
@@ -725,8 +759,9 @@ def panel_detail(
     elif agent.status is Status.WORKING and agent.progress:
         headline = agent.progress
     status = tile_status_text(agent, lang)
+    time = tile_time_text(agent, elapsed)
     return PanelView(
-        title=f"{status} · {elapsed}" if elapsed else status,
+        title=f"{status} · {time}" if time else status,
         lines=lines,
         color=color or status_color(agent.status),
         headline=headline,

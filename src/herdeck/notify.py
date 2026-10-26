@@ -49,10 +49,21 @@ DONE_AFTER_INTERACTION_S = 10.0
 _THROTTLE_MAX_KEYS = 1024
 
 
+# Notification titles name the agent the way people do, not by the raw id:
+# Herdr reports bare "claude"/"codex", T3 its provider instance ("claudeAgent").
+_AGENT_NAMES = {"claude": "Claude", "claudeagent": "Claude", "claude-code": "Claude",
+                "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini", "cursor": "Cursor"}
+
+
+def agent_name(agent_type: str) -> str:
+    """Display name of an agent type for alert titles; unknown ids pass through."""
+    return _AGENT_NAMES.get((agent_type or "").casefold(), agent_type or "agent")
+
+
 def event_title(agent_type: str, event: str, lang: str = "en") -> str:
-    """Localized notification title, e.g. ``claude · needs input``."""
+    """Localized notification title, e.g. ``Claude · needs input``."""
     key = "notify.title_blocked" if event == "blocked" else "notify.title_done"
-    return tr(lang, key, agent=agent_type or "agent")
+    return tr(lang, key, agent=agent_name(agent_type))
 
 
 class NotifyThrottle:

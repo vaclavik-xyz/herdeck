@@ -27,7 +27,6 @@ const LABELS: Record<Lang, Record<string, string>> = {
     toggle_deck: "Show or hide shortcut", next_blocked: "Next blocked agent shortcut",
     restart_deck: "Restart deck shortcut", d200_standard_writer: "D200 standard writer",
     uhubctl: "uhubctl executable", usb_hub: "D200 USB hub", usb_port: "D200 USB port",
-    desktop_read_state: "Read T3 desktop state",
   },
   cs: {
     id: "Název serveru", url: "Adresa bridge", token_env: "Reference tokenu", token_file: "Soubor s tokenem",
@@ -56,7 +55,6 @@ const LABELS: Record<Lang, Record<string, string>> = {
     toggle_deck: "Zkratka pro zobrazení", next_blocked: "Zkratka na dalšího blokovaného",
     restart_deck: "Zkratka pro restart decku", d200_standard_writer: "Standardní zapisovač D200",
     uhubctl: "Spustitelný soubor uhubctl", usb_hub: "USB hub s D200", usb_port: "USB port s D200",
-    desktop_read_state: "Číst stav T3 desktopu",
   },
 };
 

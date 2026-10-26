@@ -925,6 +925,8 @@ def test_hardware_maintenance_keys_parse_with_defaults(tmp_path):
 
 
 def test_t3_desktop_read_state_is_a_t3_server_option(tmp_path, monkeypatch):
+    # Obsolete since T3 orchestration V2 (read state is on the server), but an
+    # old config that still sets it must keep loading after an upgrade.
     monkeypatch.setenv("TOK", "secret")
     base = '[[servers]]\nid = "t3"\nurl = "http://127.0.0.1:3773"\ntoken_env = "TOK"\n'
     config = write(tmp_path / "config.toml", base + 'backend = "t3"\ndesktop_read_state = true\n')
@@ -939,9 +941,73 @@ def test_t3_desktop_read_state_is_a_t3_server_option(tmp_path, monkeypatch):
         resolve_profile(load_settings(config))
 
 
+def test_t3_issuer_ssh_is_a_validated_t3_server_option(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "t3"\nurl = "http://127.0.0.1:13773"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\nissuer_ssh = "admin@100.115.61.124"\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].issuer_ssh == "admin@100.115.61.124"
+    config = write(tmp_path / "config.toml", base + 'backend = "t3"\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].issuer_ssh is None
+    for bad in ("-oProxyCommand=sh", "admin@host;rm -rf ~", "admin@host -L1:x:2", ""):
+        config = write(tmp_path / "config.toml", base + f'backend = "t3"\nissuer_ssh = {bad!r}\n'.replace("'", '"'))
+        with pytest.raises(ConfigError, match="issuer_ssh must be user@host"):
+            resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + 'issuer_ssh = "admin@host"\n')
+    with pytest.raises(ConfigError, match="T3 servers only"):
+        resolve_profile(load_settings(config))
+
+
 def test_notifications_payload_done_rules_parsed():
     from herdeck.settings import _notifications_config
 
     n = _notifications_config({"done_min_work": 3, "done_short_delay": 10})
     assert (n.done_min_work, n.done_short_delay) == (3, 10)
     assert _notifications_config({}).done_min_work == 0
+
+
+def test_server_label_is_optional_stripped_and_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "m4"\nurl = "ws://127.0.0.1:8788"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base)
+    assert resolve_profile(load_settings(config)).config.servers[0].label is None
+    config = write(tmp_path / "config.toml", base + 'label = "  M4  "\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].label == "M4"
+    config = write(tmp_path / "config.toml", base + 'label = "   "\n')
+    assert resolve_profile(load_settings(config)).config.servers[0].label is None
+    config = write(tmp_path / "config.toml", base + "label = 4\n")
+    with pytest.raises(ConfigError, match="label must be a string"):
+        resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + 'label = "' + "x" * 17 + '"\n')
+    with pytest.raises(ConfigError, match="longer than 16"):
+        resolve_profile(load_settings(config))
+    config = write(tmp_path / "config.toml", base + 'label = "M\\u001b4"\n')
+    with pytest.raises(ConfigError, match="control or format characters"):
+        resolve_profile(load_settings(config))
+
+
+@pytest.mark.parametrize("bad", ["\\u0085", "\\u009b", "\\u202e", "\\u200b", "\\ufeff"])
+def test_server_label_rejects_c1_and_format_characters(tmp_path, monkeypatch, bad):
+    # C1 controls (Cc) and bidi/format characters (Cf, e.g. U+202E RIGHT-TO-LEFT
+    # OVERRIDE) would garble or disguise the tile tag; user config rejects them.
+    monkeypatch.setenv("TOK", "secret")
+    base = '[[servers]]\nid = "m4"\nurl = "ws://127.0.0.1:8788"\ntoken_env = "TOK"\n'
+    config = write(tmp_path / "config.toml", base + f'label = "M{bad}4"\n')
+    with pytest.raises(ConfigError, match="control or format characters"):
+        resolve_profile(load_settings(config))
+
+
+def test_server_labels_must_be_unique(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOK", "secret")
+    servers = (
+        '[[servers]]\nid = "a"\nurl = "ws://127.0.0.1:8788"\ntoken_env = "TOK"\nlabel = "M4"\n'
+        '[[servers]]\nid = "b"\nurl = "ws://127.0.0.1:8789"\ntoken_env = "TOK"\nlabel = " m4 "\n'
+    )
+    config = write(tmp_path / "config.toml", servers)
+    with pytest.raises(ConfigError, match="servers 'a' and 'b' have the same label 'm4'"):
+        resolve_profile(load_settings(config))
+    # distinct labels (and several unlabelled servers) are fine
+    config = write(tmp_path / "config.toml", servers.replace('" m4 "', '"Neptun"')
+                   + '[[servers]]\nid = "c"\nurl = "ws://127.0.0.1:8790"\ntoken_env = "TOK"\n'
+                   + '[[servers]]\nid = "d"\nurl = "ws://127.0.0.1:8791"\ntoken_env = "TOK"\n')
+    labels = [s.label for s in resolve_profile(load_settings(config)).config.servers]
+    assert labels == ["M4", "Neptun", None, None]

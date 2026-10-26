@@ -1,12 +1,12 @@
 // The config keys the Maintenance feature added to the editor:
 // [hardware].d200_standard_writer / uhubctl / usb_hub / usb_port (DeckSection),
-// a T3 server's desktop_read_state (ServersSection) and
+// (ServersSection no longer offers desktop_read_state) and
 // [hotkeys].restart_deck (DesktopSection).
 import { describe, expect, it } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 
 import { FIELD_HELP } from "../help";
-import { getAt, parseConfig, serversOf, setServerReadState, type ConfigPayload } from "../configClient";
+import { getAt, parseConfig, serversOf, type ConfigPayload } from "../configClient";
 import DeckSection from "./DeckSection.svelte";
 import DesktopSection from "./DesktopSection.svelte";
 import ServersSection from "./ServersSection.svelte";
@@ -65,35 +65,17 @@ describe("DeckSection maintenance keys", () => {
 });
 
 describe("ServersSection desktop_read_state", () => {
-  const payload = () => parseConfig({
-    base: {
-      servers: [
-        { id: "m4", url: "ws://h:8788", token_env: "A" },
-        { id: "t3", url: "http://h:3773", token_env: "B", backend: "t3" },
-      ],
-    },
-  })!;
-
-  it("is offered only on T3 servers and toggles the key", () => {
-    const { target, state, done } = mountSection(ServersSection, payload());
+  it("is no longer offered on a T3 server, yet the stored key survives", () => {
+    const p = parseConfig({
+      base: { servers: [{ id: "t3", url: "http://h:3773", token_env: "B", backend: "t3", desktop_read_state: true }] },
+    })!;
+    const { target, state, done } = mountSection(ServersSection, p);
     try {
-      const toggles = target.querySelectorAll('[data-config-key="desktop_read_state"]');
-      expect(toggles).toHaveLength(1);
-      expect(toggles[0].closest("fieldset")?.textContent).toContain("T3 Code");
-      field(target, "desktop_read_state").input.click();
-      flushSync();
-      expect(serversOf(state.payload)[1].desktop_read_state).toBe(true);
-      expect(serversOf(state.payload)[0].desktop_read_state).toBeUndefined();
+      expect(target.querySelectorAll('[data-config-key="desktop_read_state"]')).toHaveLength(0);
+      expect(serversOf(state.payload)[0].desktop_read_state).toBe(true);
     } finally {
       done();
     }
-  });
-
-  it("drops the key when switched off", () => {
-    const on = setServerReadState(payload(), 1, true);
-    expect(serversOf(on)[1].desktop_read_state).toBe(true);
-    const off = setServerReadState(on, 1, false);
-    expect("desktop_read_state" in serversOf(off)[1]).toBe(false);
   });
 });
 

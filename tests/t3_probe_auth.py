@@ -7,7 +7,8 @@ from contextlib import contextmanager
 @contextmanager
 def session_token(binary, base_dir):
     issued = json.loads(subprocess.check_output([binary, "auth", "session", "issue",
-        "--base-dir", base_dir, "--json", "--ttl", "1h", "--label", "Herdeck disposable pilot"],
+        "--base-dir", base_dir, "--json", "--ttl", "1h", "--label", "Herdeck disposable pilot",
+        "--scope", "orchestration:read", "--scope", "orchestration:operate"],
         text=True, stderr=subprocess.DEVNULL, timeout=30))
     try:
         yield issued["token"]
@@ -17,3 +18,7 @@ def session_token(binary, base_dir):
             timeout=30, check=False)
         if result.returncode:
             raise RuntimeError("Could not revoke the disposable T3 probe session")
+
+
+def descriptor_summary(desc):
+    return {"protocol": desc.get("orchestrationProtocolVersion"), "version": desc.get("serverVersion")}

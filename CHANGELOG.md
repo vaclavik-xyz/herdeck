@@ -81,6 +81,148 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runs the strip off the work area; the strip is drawn lifted just enough and
   returns to its place when the group folds.
 
+## [0.18.0] - 2026-10-26
+
+### Added
+- A T3 thread whose finished run left a background command waiting on an open
+  linked PR's checks (`gh pr checks --watch`, "Wait for PR 649 checks") shows
+  as WAITING · CI instead of done, the way herdwatch holds a herdr pane.
+
+### Changed
+- A waiting tile always says WAITING (cs: V POZADÍ); why it waits moves to the
+  line under it, before the elapsed time: `CI · 4m`, `SUB · 12m`. T3 reasons
+  are shortened to fit (SUBAGENT → SUB, COMMAND → CMD, MONITOR → MON,
+  BACKGROUND → BG), the drill panel title shows the same text, and the reason
+  hides along with the `time` tile field.
+- Notification titles use display names (`Claude · done`, not
+  `claudeAgent · done`) for herdr and T3 alike. A T3 alert's body leads with
+  the project title (a project-less thread with its own title) instead of the
+  workspace path and no longer ends in the raw server id.
+
+### Fixed
+- T3 threads the agent waits on (`t3_background_wait`, `awaited: true`) showed
+  as done on the deck while T3 itself showed them as Waiting. Herdeck now
+  follows T3's rule: an awaited task holds a finished run; an unawaited
+  command or monitor does not; subagents and background tasks do.
+
+## [0.17.0] - 2026-10-23
+
+### Added
+- `herdeck-doctor` lists which T3 environment (label, `environmentId`) each
+  configured T3 server reaches, warns when a T3 server running on this machine
+  is not connected (with the `herdeck.t3_setup` command to connect it), and
+  warns when two configured servers reach the same T3 environment (duplicate
+  tiles). Warnings are marked `!` and do not fail doctor.
+- `[[servers]].label`: an optional short name (max 16 characters) shown as
+  the server's tile tag (`"server"` in `[view].tile_fields`) instead of
+  `T3` / `HERDR`, and used in the deck's offline note, the launcher's
+  "on ..." line and the desktop connection list. Editable in Settings →
+  Servers (en/cs help).
+- With more than one T3 server configured, an unlabelled T3 server's tile tag
+  is the `label` from its T3 descriptor (e.g. `Jupiter-M4mini`, sanitized and
+  bounded), so two T3 servers are no longer both just `T3`. Single-server
+  setups keep their tags.
+- `python -m herdeck.t3_setup --id ID --issuer-ssh user@host [--install-forward]`
+  connects a T3 server on another host in one command: optional per-server
+  SSH forward LaunchAgent `com.herdeck.t3-forward.<id>` (free loopback port
+  from 13773, remote port read from the host's `server-runtime.json`), token
+  issued over SSH, same verify/Keychain/backup/rollback as a local connect;
+  rollback also revokes remotely and removes the forward agent, and
+  `--disconnect` removes it too. The entry records the new optional
+  `[[servers]].issuer_ssh` key (T3 only, validated, editable in Settings).
+- `t3_setup --renew-all [--restart-label L]` renews every T3 server due for
+  renewal (remote via `issuer_ssh`, local via the local CLI), continues past
+  failures, restarts the runtime once, prints a JSON line per server and
+  exits 1 on any failure. `--install-renew-agent` installs one hourly
+  `com.herdeck.t3-renew` LaunchAgent running it. `--renew --id` keeps working.
+- `t3_setup --token-file [PATH]` stores the new T3 token in an owner-only file
+  (default `<config dir>/<id>-token`) instead of Keychain, so setup works over
+  SSH and unsigned runtime builds read the token without a Keychain prompt.
+- `t3_setup --remove-renew-agent` boots out and deletes the
+  `com.herdeck.t3-renew` LaunchAgent (only a plist with that `Label`).
+
+### Changed
+- T3: a thread created without a project (T3's scratch "No project" bucket)
+  headlines its own title with a muted "No project" / "Bez projektu" line, and
+  with `[view].tile_icon = "project"`/`"both"` shows a grey Lucide
+  `message-square-dashed` glyph instead of a meaningless monogram. The desktop
+  agent card and done notifications follow suit.
+
+### Fixed
+- T3 token renewal (`--renew`, `--renew-all`) renews a server's `token_file`
+  when it has one, which the runtime reads before the Keychain; it used to
+  renew only the Keychain entry (leaving the runtime on the old token) or skip
+  file-only servers.
+- `python -m herdeck.t3_setup` discovers the local T3 server from the
+  `origin` that current T3 writes to `server-runtime.json` (it required the
+  older `host` key and failed).
+- `[[servers]].label` rejects C1 control and invisible format characters
+  (e.g. the U+202E bidi override), not just C0 controls.
+- Two servers can no longer share a `[[servers]].label` (compared trimmed and
+  case-insensitively); the config fails with an error naming both servers.
+- The config editor flags a server label that is too long or already used
+  right under the field instead of only on save, and its server header shows
+  the trimmed label like the connection list does.
+- `t3_setup --install-renew-agent` refuses to run from the packaged (frozen)
+  app, whose executable cannot run `-m herdeck.t3_setup`; it used to install an
+  agent that could never start.
+- `herdeck-doctor` and `t3_setup` probe a local T3 server whose
+  `server-runtime.json` origin is a wildcard bind (`0.0.0.0`, `::`) over
+  `127.0.0.1`; doctor used to skip it silently.
+- Renewing a symlinked `token_file` updates the file the link points to
+  instead of replacing the link with a regular file.
+- A failed restore or revoke during a T3 renewal rollback no longer hides the
+  original error (it is attached as a note and logged, without token values);
+  when the old credential cannot be restored, the new session is not revoked.
+- A failed `t3_setup --token-file` connect also removes the (empty)
+  directories it created for the token file, and a symlink at the token path
+  is refused like an existing file.
+- The T3 forward helpers validate the server ID and the forwarded remote host
+  themselves instead of relying on the CLI.
+
+## [0.16.0] - 2026-10-22
+
+### Added
+- T3 tiles show their project's favicon with `[view].tile_icon = "project"` or
+  `"both"`: the icon picked in T3, else the one T3 discovers in the project
+  folder, fetched over T3's asset API with the existing read scope.
+- T3: subagents are listed on their parent's tile (running / done / failed)
+  and subagent child threads no longer get tiles of their own, matching T3's
+  sidebar. A child holding its own pending request stays a tile until it is
+  answered.
+- T3: a PLAN READY thread can be replied to from the deck; the reply keeps
+  plan mode.
+- T3 tile previews and notices follow `[view].language` (en/cs).
+
+### Changed
+- The T3 backend now requires T3 0.0.46+ (orchestration protocol 2; currently
+  the preview/nightly channel). Tiles show the true per-thread status from the
+  server, and Done/seen is shared through the server's `lastVisitedAt`:
+  opening a thread in T3 desktop or mobile clears Done on the deck, and "Mark
+  seen" clears it everywhere.
+- T3 actions (approve, deny, answer, stop, reply, implement plan, settle,
+  snooze, mark seen) are dispatched over the WebSocket with idempotent
+  retries. With a read-only token the tiles stay live and the
+  first refused action disables actions for that connection, with a notice on
+  every tile.
+- `herdeck-t3-connect` and renewal issue scoped tokens (`orchestration:read`
+  and `orchestration:operate`); renewal finds the CLI of T3 0.0.42+.
+
+### Removed
+- Support for T3 servers below 0.0.46 (orchestration V1); they show as
+  incompatible.
+- The T3 desktop read-state bridge and the `desktop_read_state` editor toggle.
+  The config key and `HERDECK_T3_DESKTOP_READ_STATE` are still accepted,
+  ignored, and logged once as obsolete.
+
+### Fixed
+- Agent card: rejected and uncertain T3 results show as failures, and a T3
+  option sends its own payload when several options share an action id.
+- `/health` reports an incompatible T3 server instead of a generic error; a
+  refused retry handshake marks the command as uncertain.
+- T3 token renewal works with the standalone `runtime/versions/<v>/t3` CLI and
+  prerelease/nightly runtime versions (e.g. `0.1.2-nightly.20261022.3512`).
+
 ## [0.15.0] - 2026-10-01
 
 ### Added

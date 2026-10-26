@@ -23,6 +23,10 @@ from .project_icon_discovery import MAX_ICON_BYTES, icon_hash, read_icon_file
 log = logging.getLogger(__name__)
 
 STORE_MAX_ENTRIES = 128
+# ``TileView.project_icon`` naming the bundled "no project" glyph (drawn by
+# icons.no_project_image) instead of a content hash in the store. The ":"
+# keeps it apart from every icon hash.
+NO_PROJECT_ICON = "builtin:no-project"
 STORE_MAX_BYTES = 8 * 1024 * 1024
 # How often an override file is re-stat'ed (renders run every tick).
 OVERRIDE_RECHECK_S = 5.0
@@ -200,6 +204,10 @@ def tile_icon_fields(
     resolved = target.resolve(
         name, getattr(state, "project_icon", ""), getattr(view, "project_icons", None) or {}
     )
+    if resolved is None and getattr(state, "no_project", False):
+        # A project-less T3 thread: a neutral bundled glyph, not a monogram of
+        # the scratch dir's path (an override for that path still wins).
+        resolved = NO_PROJECT_ICON
     if resolved is None and getattr(view, "project_icon_fallback", "monogram") == "agent":
         # No favicon: draw the tile exactly as tile_icon="agent" would.
         return {"tile_icon": "agent", "project_icon": None, "project_name": ""}

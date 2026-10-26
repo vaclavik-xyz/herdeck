@@ -47,6 +47,7 @@
       terminal_title: "Show or hide a read-only live view of the agent's pane",
       offline: "Server disconnected — actions are unavailable until it reconnects.",
       since: "for {since}",
+      no_project: "No project",
       "status.blocked": "blocked",
       "status.working": "working",
       "status.idle": "idle",
@@ -63,6 +64,7 @@
       "out.disconnected": "The server is disconnected.",
       "out.invalid": "The runtime refused this input.",
       "out.rejected": "The bridge refused it: {message}",
+      "out.uncertain": "Not confirmed — it may or may not have arrived: {message}",
       "out.error": "Error: {message}",
       "out.gone": "The agent is gone.",
       "out.forbidden": "Refused: the runtime's access token changed.",
@@ -100,6 +102,7 @@
       terminal_title: "Zobrazí nebo skryje živý náhled panelu agenta (jen pro čtení)",
       offline: "Server je odpojený — akce nejsou dostupné, dokud se znovu nepřipojí.",
       since: "{since}",
+      no_project: "Bez projektu",
       "status.blocked": "blokován",
       "status.working": "pracuje",
       "status.idle": "nečinný",
@@ -116,6 +119,7 @@
       "out.disconnected": "Server je odpojený.",
       "out.invalid": "Runtime tento vstup odmítl.",
       "out.rejected": "Bridge to odmítl: {message}",
+      "out.uncertain": "Nepotvrzeno — mohlo i nemuselo dorazit: {message}",
       "out.error": "Chyba: {message}",
       "out.gone": "Agent už neexistuje.",
       "out.forbidden": "Odmítnuto: změnil se přístupový token runtime.",
@@ -274,7 +278,9 @@
     return key in m ? m[key] : detail?.status ?? "";
   });
   const place = $derived(
-    detail ? [detail.repo, detail.branch].filter(Boolean).join(" · ") : "",
+    detail
+      ? [detail.noProject ? m.no_project : detail.repo, detail.branch].filter(Boolean).join(" · ")
+      : "",
   );
   const where = $derived(
     detail ? [detail.workspace, detail.tab].filter(Boolean).join(" › ") : "",

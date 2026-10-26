@@ -146,7 +146,7 @@ def test_alert_formatter_truncates_prompt_and_builds_keyboard():
         agent, metadata_body="herdeck · feat/tg", prompt="0123456789abcdef", token="tok1"
     )
 
-    assert text.startswith("codex · needs input\nherdeck · feat/tg\n")
+    assert text.startswith("Codex · needs input\nherdeck · feat/tg\n")
     assert "local:p1" not in text
     assert "0123456789ab..." in text
     assert markup["inline_keyboard"][0][0] == {

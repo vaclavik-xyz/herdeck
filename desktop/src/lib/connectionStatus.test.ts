@@ -60,4 +60,15 @@ describe("connectionInventory", () => {
       { id: "lab", active: false, health: "inactive" },
     ]);
   });
+
+  it("carries the configured server label for display", () => {
+    const labelled = parseConfig({
+      base: { servers: [{ id: "m4", url: "ws://m4:8788", token_env: "T", label: " M4 " }, { id: "lab", url: "ws://lab", token_env: "L" }] },
+    })!;
+    const result = connectionInventory(labelled, view());
+    expect(result.remote.map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: "m4", label: "M4" },
+      { id: "lab", label: "" },
+    ]);
+  });
 });

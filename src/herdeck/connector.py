@@ -52,10 +52,14 @@ def _now_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
-def create_connector(server, **kwargs):
+def create_connector(server, *, language="en", **kwargs):
+    """``language`` ([view].language) localises the previews a T3 connector
+    writes itself; a herdr bridge sends its own text and does not take it."""
     if server.backend == "t3":
         from .t3 import T3Connector
-        return T3Connector(server, **kwargs)
+        return T3Connector(server, language=language, **kwargs)
+    # Only a T3 server has a descriptor label; a herdr bridge never reports one.
+    kwargs.pop("on_server_label", None)
     return Connector(server, **kwargs)
 
 

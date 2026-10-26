@@ -235,7 +235,7 @@ def test_bridge_with_active_telegram_owns_telegram_for_its_agents(harness):
     h = harness()
     h.event("b", "p1", Status.BLOCKED)
     h.event("b", "p2", Status.DONE)
-    assert h.banners == ["claude · needs input", "claude · done"]
+    assert h.banners == ["Claude · needs input", "Claude · done"]
     assert h.telegram == [] and h.interactive == []
 
 
@@ -243,10 +243,10 @@ def test_old_bridge_agents_keep_the_runtime_telegram(harness):
     h = harness()
     h.event("a", "p1", Status.BLOCKED)
     h.event("a", "p2", Status.DONE)
-    assert h.banners == ["claude · needs input", "claude · done"]
+    assert h.banners == ["Claude · needs input", "Claude · done"]
     # blocked -> the interactive chain, done -> the one-way sink (as before)
     assert h.interactive == [AgentKey("a", "p1")]
-    assert h.telegram == ["claude · done"]
+    assert h.telegram == ["Claude · done"]
 
 
 def test_reminders_skip_telegram_for_a_telegram_bridge(harness):
@@ -257,7 +257,7 @@ def test_reminders_skip_telegram_for_a_telegram_bridge(harness):
     h.now[0] += 10 * 60
     assert h.src.check_reminders() == 2
     # both reminders reach the Mac; only "a"'s goes to Telegram
-    assert h.banners == ["claude · still needs input (10 min)"] * 2
+    assert h.banners == ["Claude · still needs input (10 min)"] * 2
     assert h.interactive == [AgentKey("a", "p1")]
     assert h.telegram == []
 
@@ -270,7 +270,7 @@ def test_capability_is_read_at_decision_time_and_dropping_it_resumes(harness):
     h.runners["b"].connector.capabilities = frozenset({"events", "telegram_config"})
     h.src._on_snapshot("b", [agent("b", "p1", Status.BLOCKED), agent("b", "p2")])
     h.event("b", "p2", Status.DONE)
-    assert h.telegram == ["claude · done"]
+    assert h.telegram == ["Claude · done"]
     h.now[0] += 3600  # past the per-agent cooldown
     h.event("b", "p1", Status.WORKING)
     h.event("b", "p1", Status.BLOCKED)
@@ -284,7 +284,7 @@ def test_capability_is_read_at_decision_time_and_dropping_it_resumes(harness):
     h.event("b", "p2", Status.WORKING)
     h.event("b", "p2", Status.DONE)
     assert h.interactive == [] and h.telegram == []
-    assert h.banners == ["claude · needs input", "claude · done"]
+    assert h.banners == ["Claude · needs input", "Claude · done"]
 
 
 def test_skip_focused_with_a_telegram_bridge_drops_the_whole_alert(harness):
@@ -296,7 +296,7 @@ def test_skip_focused_with_a_telegram_bridge_drops_the_whole_alert(harness):
     h.src._on_event("b", AgentState(AgentKey("b", "p1"), "claude", "x", Status.DONE, focused=True))
     h.src._on_event("a", AgentState(AgentKey("a", "p1"), "claude", "x", Status.DONE, focused=True))
     assert h.banners == []
-    assert h.telegram == ["claude · done"]  # "a" only
+    assert h.telegram == ["Claude · done"]  # "a" only
 
 
 # --- per-server telegram state (for the editor / GET /config) ------------------------

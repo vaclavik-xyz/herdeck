@@ -569,7 +569,8 @@ def test_slot_tile_waiting_on_beats_the_state_label():
     held.state_labels = {"waiting": "held"}
     sess.apply_snapshot("dev", [held])
 
-    assert sess._slot_tile(0).status_text == "CI"
+    assert sess._slot_tile(0).status_text == "WAITING"
+    assert sess._slot_tile(0).wait_reason == "CI"
 
 
 def test_action_tiles_default_to_english():
@@ -577,14 +578,14 @@ def test_action_tiles_default_to_english():
     assert sess._action_tile("a1", "deny").label == "Deny"
 
 
-def test_waiting_slot_shows_holder_label_not_generic_word():
+def test_waiting_slot_shows_waiting_word_with_holder_label_below():
     sess = ElgatoSession(make_config(), FakeIcons())
     sess.set_slots([("s1", (0, 0))])
     held = state("p1", Status.WAITING)
     held.waiting_on = "⏳ ci"
     sess.apply_snapshot("dev", [held])
     slot = sess._slot_tile(0)
-    assert slot.status_text == "CI"  # holder label, not "WAITING"
+    assert (slot.status_text, slot.wait_reason) == ("WAITING", "CI")
     assert slot.color == "violet"
 
 

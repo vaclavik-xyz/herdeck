@@ -62,6 +62,15 @@ def text_line(tile) -> str:
     return ""
 
 
+def holder_label(ctx, tile) -> str:
+    """What holds a waiting agent (CI, REVIEW +1): ``wait_reason``, empty
+    when the time field is hidden, then the status word (WAITING)."""
+    for value in (getattr(tile, "wait_reason", ""), getattr(tile, "status_text", "")):
+        if value and str(value).strip():
+            return str(value).strip()
+    return t(ctx, "status.waiting")
+
+
 def name_line(tile) -> str:
     """The project-first name (headline): the repo line, else the label."""
     for value in (getattr(tile, "repo", ""), getattr(tile, "label", "")):

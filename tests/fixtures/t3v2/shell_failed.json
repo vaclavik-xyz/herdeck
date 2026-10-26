@@ -1,0 +1,85 @@
+{
+ "schemaVersion": 2,
+ "snapshotSequence": 35,
+ "threads": [
+  {
+   "createdBy": "system",
+   "creationSource": "server",
+   "id": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428",
+   "projectId": "a100e613-4182-44dc-aec8-154b0ef9b7d4",
+   "title": "New thread",
+   "providerInstanceId": "codex",
+   "modelSelection": {
+    "instanceId": "codex",
+    "model": "gpt-6-astra"
+   },
+   "runtimeMode": "full-access",
+   "interactionMode": "default",
+   "branch": null,
+   "worktreePath": null,
+   "pullRequests": [],
+   "lineage": {
+    "parentThreadId": null,
+    "relationshipToParent": null,
+    "rootThreadId": "thread:project:a100e613-4182-44dc-aec8-154b0ef9b7d4:d28cffee-ce7f-494f-be58-f9bfea941428"
+   },
+   "forkedFrom": null,
+   "activeProviderThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3Athread%253Aproject%253Aa100e613-4182-44dc-aec8-154b0ef9b7d4%253Ad28cffee-ce7f-494f-be58-f9bfea941428%3Aordinal%3A1",
+   "latestRunId": "run:thread:thread%3Aproject%3Aa100e613-4182-44dc-aec8-154b0ef9b7d4%3Ad28cffee-ce7f-494f-be58-f9bfea941428:ordinal:1",
+   "latestRunRequestedAt": "2026-10-14T15:04:45.130Z",
+   "latestRunStartedAt": "2026-10-14T15:04:47.035Z",
+   "latestRunCompletedAt": "2026-10-14T15:05:11.071Z",
+   "activeRunId": null,
+   "activityRunStartedAt": null,
+   "activityRunStatus": null,
+   "status": "failed",
+   "lastError": "unexpected status 401 Unauthorized: Missing bearer [REDACTED] basic [REDACTED] in header, url: https://api.openai.com/v1/responses, cf-ray: a4a77b1cbb92d1c5-PRG, request id: req_c86c6a49704944dca6374a71218225f4",
+   "lastErrorClass": "provider_error",
+   "usageLimitResetAt": null,
+   "pendingRuntimeRequest": null,
+   "latestVisibleMessage": null,
+   "latestUserMessageAt": "2026-10-14T15:04:45.130Z",
+   "latestUserAuthoredMessageAt": "2026-10-14T15:04:45.130Z",
+   "hasActionableProposedPlan": false,
+   "pendingBackgroundTasks": [],
+   "providerInstanceHistory": [
+    "codex"
+   ],
+   "goal": null,
+   "itemCount": 2,
+   "visibleItemCount": 2,
+   "createdAt": "2026-10-14T14:46:03.425Z",
+   "updatedAt": "2026-10-14T15:05:11.071Z",
+   "archivedAt": null,
+   "settledOverride": null,
+   "settledAt": null,
+   "unsettledAt": null,
+   "snoozedUntil": null,
+   "snoozedAt": null,
+   "limitRecovery": null,
+   "pinnedAt": null,
+   "autoSettleDisabledAt": null,
+   "pinOrderKey": null,
+   "lastVisitedAt": "2026-10-14T14:50:00.000Z",
+   "titleRegeneration": null,
+   "deletedAt": null
+  }
+ ],
+ "archivedThreads": [],
+ "projects": [
+  {
+   "id": "a100e613-4182-44dc-aec8-154b0ef9b7d4",
+   "title": "proj",
+   "workspaceRoot": "/Users/dev/proj",
+   "repositoryIdentity": null,
+   "defaultModelSelection": null,
+   "defaultThreadEnvMode": null,
+   "autoPull": false,
+   "faviconPath": null,
+   "projectIcon": null,
+   "scripts": [],
+   "createdAt": "2026-10-14T14:46:02.753Z",
+   "updatedAt": "2026-10-14T14:46:02.753Z"
+  }
+ ]
+}

@@ -139,6 +139,7 @@ Rules:
 | `label`, `subtext` | the key's text (non-agent keys) |
 | `title`, `workspace`, `repo`, `branch` | the agent's task title, herdr workspace, configured first/second tile line |
 | `status_text`, `time_text` | the localized status word and the time in that status ("4m") |
+| `wait_reason` | what holds a waiting agent ("CI", "REVIEW +1"); empty when the user hides the time line |
 | `agent_type`, `project_icon`, `project_name` | for `ctx.agent_mark` / `ctx.project_mark` |
 | `subagents`, `pinned`, `server_tag` | running subagents, pinned, backend label |
 | `index`, `spinner` | the key position; the rotation phase of a working tile (`None` otherwise) |

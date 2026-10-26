@@ -294,6 +294,32 @@ Tailscale network; Tailscale SSH is not part of the data path. Local and remote
 agents are keyed by server/session id, so commands always return to the bridge
 that supplied the pane.
 
+### Telling servers apart on the tiles
+
+With `"server"` in `[view].tile_fields`, every agent tile carries a small tag
+in its bottom band and a per-server accent colour (`[theme.server_accents]`).
+The tag is resolved per server:
+
+1. the server's configured `label` (`[[servers]]`, at most 16 characters,
+   editable in **Settings → Servers**), e.g. `label = "M4"`;
+2. for a T3 server, the `label` its descriptor reports
+   (`/.well-known/t3/environment`, e.g. `Jupiter-M4mini`), but only when more
+   than one T3 server is configured — with one, `T3` already identifies it;
+3. otherwise `T3` or `HERDR`, as before.
+
+A tag wider than the tile is ellipsized. A configured `label` also names the
+server in the deck's offline note ("M4 offline"), the launcher's "on M4" line
+and the desktop connection list.
+
+```toml
+[[servers]]
+id = "t3-m4mini"
+backend = "t3"
+url = "http://100.x.y.z:3773"
+token_env = "T3_M4MINI_TOKEN"
+label = "M4"
+```
+
 For agent-managed setup without the connection UI, use the
 **[agent setup runbook](docs/agent-setup.md)**. It covers topology discovery,
 safe token transfer, local/remote/mixed configuration, multiple bridge
@@ -325,6 +351,15 @@ config error, not skipped. A launchd or systemd runtime has no shell
 environment (and `herdeck-service` refuses `--env` names containing `TOKEN`),
 so give it a `token_file` or a keychain entry.
 
+T3 Code servers (`backend = "t3"`) are connected by `python -m herdeck.t3_setup`
+(also `herdeck-t3-connect`): `--id t3-local` for T3 on this Mac, or
+`--id t3-m4mini --issuer-ssh user@host --install-forward` for T3 on another
+host, which installs an SSH-forward LaunchAgent, issues the token over SSH and
+records `issuer_ssh` on the server entry. `--renew-all --restart-label <label>`
+renews every T3 token due within seven days and restarts the runtime once;
+`--install-renew-agent` runs that hourly. Details:
+[agent setup](docs/agent-setup.md#dedicated-t3-transport-and-renewal-macos).
+
 A config file that exists but cannot be loaded (a token no source has, a
 malformed value) never starts the demo fleet. The deck shows an empty grid and
 a red **Config error** status panel naming the problem, and `/health` and
@@ -341,6 +376,15 @@ resolved (`env`, `file` or `keychain`), printing a
 pass/fail checklist with hints (it never prints token values). It also compares
 versions: the running runtime against this install, and every bridge against
 the runtime, and asks each bridge whether herdr answers it.
+
+For T3 servers it reads each one's public `/.well-known/t3/environment`
+descriptor and lists the environment it reaches (label and `environmentId`).
+Two advisory warnings, marked `!` (they do not fail doctor): a T3 server runs on
+this machine (`~/.t3/userdata/server-runtime.json`) but no configured server
+reaches its environment — with the `python -m herdeck.t3_setup --id <id>`
+command to connect it — and two configured servers reach the same environment,
+which shows every thread twice. Doctor only looks at this machine; T3 on other
+machines is found only through servers you configure.
 
 When the deck goes dark, the runtime's token-gated `GET /health` says why: its
 `version`, `protocol`, `pid` and `uptime_s`; `config_error` when the config
@@ -1195,6 +1239,10 @@ ancestors, or `/`). Override it per repository with
 `[view.project_icons]` (`myrepo = "~/icons/myrepo.png"`, a path on the machine
 running the deck; quote a repo name that contains a dot, e.g.
 `"vaclavik.xyz" = "~/icons/site.png"`, or TOML reads it as a nested table).
+T3 tiles take the favicon T3 itself shows for the project (the icon chosen in
+T3, else T3's own discovery in the project folder), same limits; their
+`[view.project_icons]` key is the project's full workspace path
+(`"/Users/me/proj" = "~/icons/proj.png"`).
 SVG icons are rendered with resvg (bundled in the packaged app and the Elgato
 plugin). An SVG that references anything outside itself (a file path or URL in
 `href`/`url(...)`) is refused and shows the monogram.
@@ -1719,7 +1767,7 @@ Legacy flat configs use the root `[notifications]` table with the same fields.
 
 ## Known follow-ups
 
-- [T3 Code integration](docs/t3-code-integration.md): implementation and pilot tracking.
+- [T3 Code integration](docs/t3-code-integration.md): T3 0.0.46+ (orchestration protocol 2) contract, status mapping and delivery rules.
 - Confirm exact approve/deny key sequences per agent against live prompts
   (config-only changes).
 - Drill-in shows the read prompt text on a spare tile; richer prompt display is

@@ -1142,7 +1142,7 @@
                     <div class="diagnostic-row">
                       <span class:connected={row.health === "connected"} class:inactive={row.health === "inactive"} class="connection-light" aria-hidden="true"></span>
                       <div class="connection-identity">
-                        <strong>{row.id || lm.new_server}</strong>
+                        <strong>{row.label ? `${row.label} · ${row.id}` : row.id || lm.new_server}</strong>
                         <small>{row.url}</small>
                         <small class="profile-use">{row.active ? lm.active_profile : lm.inactive_profile}</small>
                       </div>

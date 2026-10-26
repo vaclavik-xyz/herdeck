@@ -8,6 +8,10 @@ token_env = "HERDECK_WORKBOX_TOKEN" # token comes from this env var, never this 
 # A launchd/systemd runtime has no shell env: give it a 0600 token file instead
 # (a file readable by group/others is refused). ~ is expanded.
 # token_file = "~/.config/herdeck/workbox-token"
+# Optional short name (max 16 chars) shown as this server's tile tag when
+# [view].tile_fields has "server" (default: "HERDR" / "T3"). Also names the
+# server in the deck's offline note and the launcher's "on ..." line.
+# label = "WB"
 
 # ---------------------------------------------------------------------------
 # Base configuration — applies to all profiles (the "default" base)
@@ -51,7 +55,8 @@ collapse_idle = false
 # with your user privileges. An unknown or broken theme draws classic.
 deck_theme = "classic"
 # Tile icon: "agent" (default) = the agent's logo, "project" = the project's
-# favicon (found in the repo by the bridge; a coloured letter when none),
+# favicon (found in the repo by the bridge, or served by T3 for T3 tiles; a
+# coloured letter when none),
 # "both" = the agent's logo with a small project badge. In "project" mode the
 # spin working animation renders as a comet ring around the favicon.
 tile_icon = "agent"

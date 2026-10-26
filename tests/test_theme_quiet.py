@@ -80,7 +80,7 @@ def test_quiet_done_is_outlined_and_says_so(provider, log):
 
 
 def test_quiet_long_status_word_moves_under_the_mark_whole(provider, log):
-    quiet.THEME.agent_tile(agent("waiting", status_text=""), make_ctx(provider, "cs"), None)
+    quiet.THEME.agent_tile(agent("waiting", status_text="", wait_reason=""), make_ctx(provider, "cs"), None)
     (box, _, _), = [e for e in log.take() if e[1] == "V POZADÍ"]
     assert quiet.MARK_X <= box[0] < quiet.MARK_X + 4 and box[1] >= 84  # own row, under the mark
 

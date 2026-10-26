@@ -110,6 +110,12 @@ def result_outcome(data: dict) -> dict:
             # "stale": the bridge saw this episode answered already (events.py)
             return outcome("stale")
         return outcome("rejected", str(message))
+    if data.get("rejected"):
+        # T3: the server refused the command (e.g. a read-only token).
+        return outcome("rejected", str(data.get("message") or ""))
+    if data.get("uncertain"):
+        # T3: delivery unknown; the connector locks the controls meanwhile.
+        return outcome("uncertain", str(data.get("message") or ""))
     if data.get("focused"):
         return outcome("focused")
     error = data.get("error")
@@ -371,6 +377,7 @@ class AgentCardMixin:
             "label": agent.label,
             "title": agent.title,
             "repo": agent.repo,
+            "no_project": agent.no_project,
             "branch": agent.branch,
             "workspace": agent.workspace,
             "tab": agent.tab,
@@ -426,7 +433,7 @@ class AgentCardMixin:
 
     def card_answer(self, server_id: str, pane_id: str, choice: str, revision: str) -> dict | None:
         """Answer the blocked prompt the user saw (``revision``) with ``choice``
-        (an option key, a fallback action id, or a T3 action id)."""
+        (an option key, a fallback action id, or a T3 option index)."""
         key = AgentKey(server_id, pane_id)
         orch = self._orch
         with self._card_deck_lock():
@@ -440,15 +447,17 @@ class AgentCardMixin:
             if agent.backend == "t3":
                 if not revision or revision != agent.backend_revision:
                     return outcome("stale")
-                option = next((o for o in agent.backend_actions if o["id"] == choice), None)
+                # ``choice`` is the option's index (the answer_options key): the
+                # action id alone is ambiguous between T3 options.
                 allowed = {o["key"] for o in orch.answer_options(key, "")}
-                if option is None or choice not in allowed:
+                if choice not in allowed:
                     return outcome("invalid")
+                option = agent.backend_actions[int(choice)]
                 cmd = Command(
                     "backend_action",
                     server_id,
                     pane_id,
-                    action=choice,
+                    action=option["id"],
                     payload=option.get("payload", {}),
                     decision_revision=agent.backend_revision,
                 )

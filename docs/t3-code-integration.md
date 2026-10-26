@@ -1,275 +1,293 @@
-# T3 Code integration: design and implementation plan
+# T3 Code integration (orchestration protocol 2)
 
-Status: Implemented; physical display and local desktop Done-to-Idle behavior
-verified by the user on MacBench. Physical approval, Stop, and question handling
-remain separate acceptance items. Prepared for release 0.5.0.
-Updated: 2026-09-07.
+Status: implemented for T3 **0.0.46 and newer** (orchestration protocol 2).
+Verified live on 2026-10-14 against `t3@0.0.46-preview.20261010.2909`.
+Design: [the V2 spec](superpowers/specs/2026-10-14-t3-orchestration-v2-design.md).
+Upstream audit: [t3-orchestration-v2-2026-10-14](research/t3-orchestration-v2-2026-10-14.md).
+Setup and operations: [agent-setup.md](agent-setup.md#t3-code-setup).
 
-## Goal
+Herdeck shows T3 conversations next to Herdr agents and routes every action to
+the backend that owns the thread. Herdr workflows are unaffected when T3 is
+absent or offline.
 
-Use T3 Code for conversations and code review while retaining Herdeck's hardware
-interface. Show Herdr agents and T3 conversations together, with correct routing
-of every action to its owning backend. Existing Herdr workflows must continue
-to work when T3 is absent or disconnected.
+## Requirement
 
-The integration is implemented on `feat/t3-code-integration`. Publication through
-a PR and a new release was authorized on 2026-09-07. The implementation history
-below retains earlier verification boundaries; current setup is documented in
-`agent-setup.md`.
+T3 0.0.46+ speaks orchestration protocol 2. Until it reaches the stable
+channel, install the preview/nightly build (`npm i -g t3@preview`) or switch
+the T3 desktop app to its preview channel. Stable 0.0.45 and older (protocol 1)
+are not supported: the connection stays offline with
+`T3 server speaks orchestration protocol 1; Herdeck needs 2 (T3 0.0.46+)`.
+Herdeck checks the server descriptor first and again after every reconnect.
 
-## Evidence and compatibility baseline
+## Contract summary
 
-Local Herdeck checkout inspected at
-`d21429ba67b31905836a2f43780a68a46a2c7378`:
+All reads are plain HTTP polling (every second); the WebSocket is used only to
+dispatch commands and to ask for project favicon URLs. A credential is a bearer
+token (no DPoP needed).
 
-- [`model.py`](../src/herdeck/model.py): `AgentKey(server_id, pane_id)` scopes
-  identity; `AgentState` carries display state and terminal identity.
-- [`deckapp/live.py`](../src/herdeck/deckapp/live.py): `LiveSource` combines
-  multiple connections and routes commands; blocked details currently use
-  terminal prereads and detection.
-- [`commands.py`](../src/herdeck/commands.py): high-level approve/deny/stop
-  actions become terminal key sequences. These cannot be reused as T3 actions.
-- [`bridge.py`](../src/herdeck/bridge.py): the bridge exposes Herdr-specific
-  snapshots, terminal reads, focus and input.
-- [`deckapp/source.py`](../src/herdeck/deckapp/source.py): `StateSource` separates
-  state ingestion from deck rendering, but is not yet a general backend API.
+| Step | Endpoint | Notes |
+|---|---|---|
+| Descriptor | `GET /.well-known/t3/environment` (no auth) | `orchestrationProtocolVersion` must be exactly 2 (absent means 1); `capabilities` advertise `threadSettlement`, `threadSnooze`, `threadVisitedTracking`, `serverResolvedCommandContext` |
+| Shell | `GET /api/orchestration/shell` | `threads`, `archivedThreads`, `projects`; needs `orchestration:read` |
+| Detail | `GET /api/orchestration/threads/:id/bounded` | prompt of a pending request, plan text, last assistant message; the unbounded `/threads/:id` is used only when the bounded plan text is left in a turn item |
+| Ticket | `POST /api/auth/websocket-ticket` | bearer, no body; the ticket lasted 5 minutes on the server we observed |
+| Dispatch | `ws(s)://host/ws?orchestrationProtocol=2&wsTicket=...` | one `orchestration.dispatchCommand` request, wait for the `Exit`, close; `Ping` is answered with `Pong` |
+| Favicon | same WebSocket, `assets.createUrl` with `{resource: {_tag: "project-favicon", cwd: workspaceRoot, path?: faviconPath}}`, then `GET relativeUrl` | needs only `orchestration:read`; the signed `/api/assets/...` URL lasts an hour; 404 = no favicon |
 
-T3 upstream inspected at `7544d3d2c8e0145018d9adb7a1a650333b75362a`:
+Facts checked on the live server: shell and detail reads without the
+`x-t3-orchestration-protocol: 2` header fail with HTTP 400; the WebSocket
+without `orchestrationProtocol=2` fails with HTTP 426; a dispatch result is
+`{sequence}`; replaying a `commandId` returns the same result without
+executing it again; a schema error comes back as `Die`, a refused command as
+`Fail` (`OrchestrationV2DispatchCommandError`); `thread.visit` sets the shared
+`lastVisitedAt`. HTTP errors: 401 invalid or expired credential, 403 missing
+scope (`insufficient_scope` as observed), 404 unknown thread.
 
-- [RPC contract](https://github.com/pingdotgg/t3code/blob/7544d3d2c8e0145018d9adb7a1a650333b75362a/packages/contracts/src/rpc.ts)
-  exposes orchestration subscriptions and command dispatch.
-- [Orchestration contract](https://github.com/pingdotgg/t3code/blob/7544d3d2c8e0145018d9adb7a1a650333b75362a/packages/contracts/src/orchestration.ts)
-  includes `orchestration.subscribeShell`, `orchestration.subscribeThread`,
-  `thread.turn.start`, `thread.turn.interrupt`, `thread.approval.respond`, and
-  `thread.user-input.respond`.
+Credential scopes: `orchestration:read` (tiles) and `orchestration:operate`
+(actions). Setup and renewal issue both:
 
-Live spike: T3 npm package 0.0.31, isolated data directory, loopback port 13773.
-Issued a temporary bearer session with `t3 auth session issue` into process
-memory and fetched `/api/orchestration/shell` successfully (one project and
-one conversation). Existing `~/.t3` data was not modified.
-
-Transport decision: use the authenticated HTTP shell/detail/dispatch endpoints
-already exposed by T3, with one-second polling and a fresh pre-action read.
-Python's standard library handles the transport; no Node helper is bundled.
-Redirects and environment proxies are disabled to avoid credential forwarding.
-This replaces the proposed WebSocket transport. Full reconnect and action pilot
-evidence will be recorded below; no stable third-party API promise is assumed.
-Desktop thread navigation remains deferred because it has not been verified.
-
-## Architecture
-
-Keep the renderer and hardware output shared. Add a T3 adapter alongside the
-Herdr path, with backend-neutral state and semantic actions at their boundary:
-
-```text
-Herdr connections -> Herdr adapter --+
-                                    +-> shared agent state -> Herdeck -> deck
-T3 server --------> T3 adapter ------+
-
-deck action -> owning adapter -> owning backend
+```sh
+t3 auth session issue --scope orchestration:read --scope orchestration:operate \
+  --ttl 30d --label "Herdeck <id>" --json
 ```
 
-Introduce this boundary incrementally around the existing live source and
-command path. Do not implement T3 by pretending it is a terminal or by starting
-another Codex process for the same conversation. Prefer consuming T3's existing
-backend without a T3 fork; revisit only if T3-01 proves that insufficient.
+Scopes are not checked at connect. With a read-only token the tiles stay live
+and show normal controls until the first action is refused for the missing
+scope; from then on actions are disabled for that connection and every tile
+says `T3 credential lacks orchestration:operate — actions disabled.`
 
-The adapter uses Python HTTP polling. Thread reads request the latest three turns
-to bound history transfer. The packaged runtime has no Node helper dependency.
+## Status mapping
 
-### Identity, state and capabilities
+First matching row wins, lifecycle first (`src/herdeck/t3_state.py`).
 
-- Identify T3 conversations by backend instance plus thread ID. Provider kind
-  (for example Codex) is separate from backend kind (T3 versus Herdr).
-- Preserve Herdr wire compatibility. Do not use a fabricated terminal ID to
-  bypass existing identity checks; define explicit backend identity instead.
-- Map active turns to `WORKING`, pending approvals or questions to `BLOCKED`,
-  and inactivity to `IDLE`. Specify completion/error mappings against observed
-  T3 events before using `DONE`; inactivity alone does not prove task completion.
-- Disconnection means unavailable with actions disabled, not successful
-  completion. Unknown upstream states remain `UNKNOWN`.
-- Preserve project, branch and title when supplied. Missing fields remain empty.
-- Capabilities describe available actions and preview type. T3 previews show
-  the latest message or pending request, not an emulated terminal screen.
-- Handle structured questions separately from approval prompts; arbitrary
-  questions must not be reduced to Approve/Deny buttons.
+| Condition | Status | Label / attention |
+|---|---|---|
+| deleted, archived, settled, or snoozed (`snoozedUntil` in the future, no raised hand) | IDLE | DELETED / ARCHIVED / SETTLED / SNOOZED; not counted as active work |
+| pending request, kind other than `user_input` / `auth_refresh` | BLOCKED | approval |
+| pending request `user_input` / `auth_refresh` | BLOCKED | input |
+| `preparing` / `starting` | WORKING | CONNECTING |
+| `queued`, or a message sent in the last 2 minutes that no run has picked up | WORKING | QUEUED |
+| `running` | WORKING | none |
+| `waiting`, or `completed` with a pending background task other than `command` | WAITING | SUBAGENT / COMMAND / MONITOR / BACKGROUND (first holding task) |
+| `failed` | UNKNOWN | ERROR, or LIMIT for `usage_limit`; preview `T3 error: ...` |
+| plan mode, an actionable proposed plan and no active run (settled) | BLOCKED | PLAN READY |
+| `completed` and `latestRunCompletedAt` newer than `lastVisitedAt` | DONE | completion |
+| anything else (idle, completed and seen, never visited, interrupted, cancelled, rolled back) | IDLE | none |
 
-### Action mapping
+A snoozed thread wakes on its own when the snooze ends or when a "raised hand"
+appears (a pending request, a new failure, a completion after the snooze, a
+queued turn). Archived threads stay in the snapshot so a deck pin keeps its
+tile, but do not count as active work.
 
-| Herdeck intent | T3 operation | Required guard |
-| --- | --- | --- |
-| Stop | `thread.turn.interrupt` | Current thread and active turn |
-| Approve / Deny | `thread.approval.respond` | Exact pending request and supported decision |
-| Answer question | `thread.user-input.respond` | Exact request and validated answer schema |
-| Continue / text macro | `thread.turn.start` | Idle thread, explicit text, preserved mode/model settings |
-| Open conversation | Deferred | No supported desktop navigation verified |
+## Subagents and lineage
 
-Do not infer decisions from terminal key profiles. Do not silently implement
-“approve always” or force actions where T3 lacks a verified equivalent. Continue
-must preserve the conversation's runtime and interaction mode rather than
-accidentally selecting permissive defaults.
+A thread whose `lineage.relationshipToParent` is `"subagent"` is a subagent
+child: a provider-native subagent (Claude's Agent tool, Codex or OpenCode
+subagents; `creationSource: "provider"`) or a T3 `delegate_task` child
+(`creationSource: "mcp"`). T3 hides these in its sidebar, its notifications
+and its mobile list, and Herdeck does the same: a child is not a tile, its
+detail is not read, and it raises no notification. Forks
+(`relationshipToParent: "fork"`) stay tiles of their own.
 
-Recheck request/turn identity at dispatch. Invalidate pending actions on request
-resolution, deletion and reconnect. A concurrent response in T3 must make the
-old deck action stale. Do not automatically replay writes after a disconnect or
-timeout; reconcile backend state before reporting success or allowing a retry.
+Requests. A provider-native subagent's approval or question is asked on the
+parent's thread and run: the parent shell's `pendingRuntimeRequest` carries
+it, the child shell's stays `null`, and the parent's tile answers it with
+`runtime-request.respond` on the parent thread (upstream fixtures
+`subagent_v2_approval` and `opencode_running_child_approval`). A delegate_task
+child runs its own provider session, so a request it waits on lives only on
+the child's own shell (the shell's request is never rolled up from other
+threads). So the rule is: **a subagent child that holds a pending request,
+and is neither archived nor deleted, is shown as its own tile until the
+request is answered**, with the usual approve and answer actions on the
+child's thread. Then it is hidden again.
 
-## Delivery plan
+The parent's subagent list comes from the `subagents` array of the parent's
+detail. That array is in the `/bounded` detail too (all active subagents plus
+those of its recent runs), and a `subagent.updated` event bumps the parent's
+`updatedAt`, so the parent's detail is read again when one changes. Child
+shells cannot be used for this: a provider-native child has no runs, so its
+shell status stays `idle` while it works. Each projection lists only its own
+direct subagents, so the list has depth 1 only.
 
-IDs are stable for later issue and PR references. The tracking table below
-records implementation and live verification separately from the planned scope.
+| T3 subagent status | Herdeck subagent status |
+|---|---|
+| `pending`, `running`, `waiting` | running |
+| `idle`, `completed` | done |
+| `failed`, `cancelled`, `interrupted` | failed |
+| anything else | dropped |
 
-| ID | Deliverable | Depends on | Acceptance evidence |
-| --- | --- | --- | --- |
-| T3-01 | Compatibility spike and transport decision | — | Connect to one actual T3 instance, obtain snapshot and updates, verify auth/discovery and reconnect; record version, framing, navigation and credential handling without secrets |
-| T3-02 | Minimal backend boundary and capabilities | T3-01 | Existing Herdr behavior passes; synthetic T3 state renders beside Herdr; colliding thread/pane IDs route independently; unavailable actions are disabled |
-| T3-03 | Live T3 tiles and message/request preview | T3-02 | Create a conversation in T3, run a turn and observe state/title/project on the deck; restart connection without duplicates or false completion |
-| T3-04 | Stop and explicit Continue/text actions | T3-03 | Stop affects only the selected active turn; Continue sends once to the selected idle conversation and preserves settings; uncertain delivery is surfaced |
-| T3-05 | Approval and structured question handling | T3-04 | Resolve a real pending approval and supported question from the deck; reject stale requests already handled in T3; unsupported choices remain unavailable |
-| T3-06 | Connection setup, packaging and end-to-end pilot | T3-05 | Packaged runtime connects without user-managed dependencies; mixed Herdr/T3 pilot passes hardware and desktop checks; setup and removal documented |
+Fields: `title` is the label (`type`), the first prompt line is the
+description, plus `driver`, `model` (or `modelSelection.model`), `startedAt`
+(`updatedAt` for a task that has not started yet) and `completedAt`. Ids longer
+than the model bound are hashed rather than clipped. The text and count bounds
+are the shared ones (`parse_subagents`: at most 20, most recent first);
+`subagents_running` and `subagents_total` count every listed subagent. The
+list is not part of the tile's revision, because no deck action depends on it.
 
-First usable milestone: T3-01 through T3-03, with live tiles and previews.
-Opening a conversation is included only if T3-01 verifies a supported mechanism;
-otherwise record it as deferred rather than blocking state display.
+## Done and seen
 
-Full initial integration: T3-01 through T3-06. Approval support must be tested
-with a T3 mode that actually requests approvals. Test fixtures alone are not
-proof of interoperability.
+Done is decided by the T3 server: a completed run is Done while its completion
+is newer than the thread's `lastVisitedAt`. That timestamp is shared by every
+client of the server. Opening the thread in T3 desktop or mobile clears Done on
+the deck as well, and the deck's **Mark seen** sends `thread.visit`, which
+clears it everywhere.
 
-### Expected implementation areas
+A completed thread that was never opened is not shown as Done, the same as in
+T3 itself.
 
-- New adapter module(s) and transport tests; final filenames follow T3-01.
-- `model.py`, `commands.py`, `orchestrator.py`: identity, capabilities, semantic
-  action routing and presentation of structured requests.
-- `deckapp/live.py`, connector/configuration paths: mixed sources, lifecycle,
-  reconnect and per-backend health.
-- Desktop setup and packaging: T3 connection discovery/configuration and any
-  required bundled transport. Review other clients of shared contracts,
-  including the semantic API, browser dashboard and Elgato plugin.
-- `docs/agent-setup.md`: add verified T3 setup/removal instructions at T3-06.
+## Actions and commands
 
-## Verification and rollout
+Offered only for threads with an active lifecycle (settle and wake-up controls
+excepted). Commands are built in `src/herdeck/t3_actions.py`.
 
-Use contract fixtures from the pinned T3 revision for state mapping, event
-ordering, reconnect/resync, capability handling and stale request rejection.
-Cover duplicate presses, uncertain write outcomes, a thread removed mid-action,
-and two backend instances with the same thread ID. Run relevant existing Herdr
-tests whenever shared contracts change.
+| Deck action | When offered | Command |
+|---|---|---|
+| Approve / Approve for session / Approve always / Deny | approval request that is still live; one action per option T3 lists (session and always need a second press) | `runtime-request.respond` with `decision` |
+| Answer | user-input request that is live and has a single question without multi-select; one action per option | `runtime-request.respond` with `answers` |
+| Stop | a run is active | `run.interrupt` (`holdQueue: true`) |
+| Reply | status IDLE or DONE, or PLAN READY | `message.dispatch`, 1 to 4096 characters; on PLAN READY the thread stays in plan mode and the reply refines the plan (no `sourcePlanRef`), as T3's own plan follow-up does |
+| Implement plan (confirm) | PLAN READY with an active plan | `thread.interaction-mode.set` to `default`, then `message.dispatch` with `PLEASE IMPLEMENT THIS PLAN:` and the plan (up to 120000 characters) |
+| Mark seen | DONE and `threadVisitedTracking` | `thread.visit` with the completion time |
+| Settle / Reopen | `threadSettlement`; Settle on idle, done or failed threads | `thread.settle` / `thread.unsettle` |
+| Snooze 1h / Wake now | `threadSnooze`; not while awaiting approval or input, or while a start is queued | `thread.snooze` / `thread.unsnooze` |
 
-Pilot on one project with both backends connected. Verify display, disconnect,
-Stop, Continue, approval and question handling on the hardware deck and desktop.
-Capture versions and non-secret results in this document or linked test report.
-Completion requires observed backend effects, not only a successful button press.
+A reply sent while a run is active and the server does not resolve context
+itself is queued after the run (`queue_after_active`).
 
-Keep T3 opt-in. Removing/disabling its connection restores Herdr-only operation
-without deleting T3 conversations or modifying provider credentials. Before
-runtime configuration changes follow `agent-setup.md`, inspect actual topology
-and back up relevant configuration. Do not log or commit secrets. No new DNS,
-public listener, Serve/Funnel, tunnel, proxy or firewall rule is authorized by
-this plan. Remote T3 discovery/authentication is a later scope unless the pilot
-requires it and its topology is explicitly agreed.
+## Delivery rules
 
-For implementation commits follow AGENTS.md: Conventional Commits and inspect
-the automatic Roborev result for each SHA, with bounded review/fix rounds.
-Push, merge and deployment require separate authorization.
+Every press re-reads the thread and must carry an action that is still
+offered ("T3 action is not available" otherwise, checked first) and the
+revision the deck showed ("Stale or already submitted T3 action" otherwise).
+Each command gets a `commandId` that is remembered per thread, revision,
+action, payload and reply text.
 
-## Deferred scope
+- Transport failure: the same command is retried once after one second.
+- Still failing: the result is uncertain. The tile stays read-only until the
+  thread changes, because the command either landed (the thread changes) or
+  did not. The deck offers no buttons on the read-only tile; a client that
+  still holds the older revision (for example herdeck-ctl) can send the
+  identical press (same revision, action, payload), which resends the same
+  `commandId`, which T3 de-duplicates, so a command cannot run twice. A
+  refused WebSocket upgrade on the retry also counts as uncertain.
+- Rejected by the server (`Fail`, `Die`, missing scope): the message is
+  reported, the revision is not consumed and the stored ids are dropped.
+- Accepted: the thread is refreshed immediately. Implement plan is two
+  commands in order and stops at the first failure.
+- A credential without `orchestration:operate` disables actions for the whole
+  connection until Herdeck is restarted with a new token.
+- One malformed thread degrades to a read-only tile and never fails the others.
+- Detail read failures keep the cached detail and mark the tile `STALE`
+  (read-only). A 404 drops the thread; 401 or 403 take the connection offline.
 
-- Creating projects, worktrees or new conversations from the deck.
-- Migrating or sharing existing Herdr conversations with T3.
-- Full chat/diff rendering, T3 terminal emulation and global shortcuts.
-- Provider-account management or guessed provider usage attribution.
-- Remote T3 setup, an upstream T3 fork, and broad backend framework refactoring.
+The texts Herdeck writes into a tile preview itself (the notices above, "Answer
+in T3", "T3 error: ...", "Plan ready", the lifecycle prefix, the untitled
+thread name) follow `[view].language` (`src/herdeck/i18n.py`, keys `t3.*`); a
+config reload rebuilds the connector with the new language. Text from T3
+(prompts, plans, approval option labels) is shown as sent; the deck action
+labels (Implement plan, Mark seen, ...), the tile state labels (PLAN READY,
+STALE, ...) and the result messages of `send()` are still English only.
 
-## Tracking
+## Project favicons
 
-Update each entry with its issue/PR, exact tested revisions and remaining limits.
-Do not mark milestones complete based solely on implementation or mocked tests.
+With `[view].tile_icon = "project"` or `"both"`, a T3 tile shows the favicon T3
+shows for its project: the project's `faviconPath` (the icon picked in T3)
+when set, else what T3 discovers in `workspaceRoot`. After each refresh, outside
+the delivery lock, the connector asks for every project it has not fetched in
+30 minutes (10 minutes after a miss or failure) and hands the bytes to the
+runtime's icon store; the next refresh puts the hash on the tile. Only PNG,
+ICO and SVG up to 256 KiB are used (the bridge's limits); anything else (a
+`.icns`, a larger file, a lucide `projectIcon`) keeps the monogram. A failed
+re-fetch keeps the icon already shown.
 
-| ID | Status | Issue / PR / evidence |
-| --- | --- | --- |
-| T3-01 | Verified | T3 0.0.31 live HTTP/auth/discovery and real restart probe; Python transport |
-| T3-02 | Verified | `2978baf`; mixed-backend routing, identity collision, disabled offline actions in `tests/test_t3.py` |
-| T3-03 | Verified | Live conversation, assistant reply and working/idle states; packaged mixed connections |
-| T3-04 | Verified | Live Continue and Stop; mode preservation and duplicate/stale-write tests |
-| T3-05 | Verified | Real Codex approval and single-choice question resolved via T3; `0e8ef3e` reconciles uncertain writes |
-| T3-06 | Software verified; hardware pending | `dcf4ae1`, `ea56a5e`; setup/keychain/doctor, clean install, desktop build, frozen mixed-runtime probe; physical host choice pending |
+## Server label
 
-## Verification record (2026-09-06)
+The descriptor also carries the server's display name (`"label":
+"Jupiter-M4mini"`, next to `environmentId` and `serverVersion`). The connector
+keeps it after each successful negotiation and reports it to the runtime once
+per change (`on_server_label`). It is untrusted network text: only a string is
+used, control and format characters are dropped, whitespace collapses, and it
+is cut to 32 characters (the tile ellipsizes it further to fit).
 
-- Python suite: 1,505 tests passed before the final probe-cleanup change; two
-  additional credential-cleanup tests passed afterwards. The cleanup change does
-  not alter the runtime adapter.
-- Desktop: 168 focused configuration/help tests passed; production frontend
-  build passed. Editing connections preserves the T3 backend field.
-- Clean base-package installation under Python 3.13.13 successfully executes
-  `herdeck-t3-connect --help` without extras. Base dependencies now include
-  keyring and tomli-w.
-- Real T3 probes: assistant response `HERDECK_PILOT_OK`, working-to-idle state,
-  targeted Stop, approval resolution, and single-choice question resolution.
-- Real restart probe: same conversation IDs after server restart, offline state
-  observed and pre-reconnect action revisions invalidated.
-- Frozen macOS arm64 runtime: `source=live`, `connections={local: true,
-  t3-pilot: true}`. It starts without user-installed Node. The probe does not
-  write the shared runtime discovery file.
-- Setup tested against an isolated T3 data directory and dedicated test keychain
-  namespace; doctor passed. No installed Herdeck configuration was modified.
+The deck uses it as the tile's server tag (`"server"` in `[view].tile_fields`)
+only when more than one T3 server is configured and that server has no
+configured `[[servers]].label`; a single T3 server keeps the `T3` tag. The
+deck's offline note and launcher line name a server by its configured label or
+its id, never by the descriptor label.
 
-Reproducible opt-in probes live in `tests/t3_live_probe.py` (reply/stop/approval/
-question scenarios), `tests/t3_reconnect_probe.py`, and
-`tests/t3_packaged_probe.py`. Run only against disposable T3 data as documented
-in their module docstrings. Probe sessions are revoked in `finally`.
+## Project-less threads
 
-Review record: initial automatic jobs failed to initialize the configured ACP
-reviewer. Verified infrastructure-only retries used Codex with an available
-model. Review `23728` found one Medium (uncertain writes never unlock), fixed in
-`0e8ef3e`; verification `23730` found no issues. Review `23732` found two Mediums
-(base CLI dependencies and probe token cleanup), fixed in `ea56a5e`;
-verification `23734` found no issues.
+T3 files a thread created without a project under an ordinary project (titled
+"No project" in English T3) whose `workspaceRoot` is T3's scratch dir
+(`<home>/.t3/scratch`) and whose `repositoryIdentity` is null.
+`t3_state.is_no_project` detects it from exactly that: no repository identity
+and a workspace root that is a `scratch` dir directly under a `.t3` dir. A
+thread whose `projectId` is missing or names no project in the shell counts as
+project-less too. The bucket's title is never read (T3 may localize it), and a
+git repository inside the scratch dir is a project like any other.
 
-One Low is recorded without expanding the review-fix scope: doctor currently
-checks a T3 shell's `threads` array while the connector also requires `projects`.
-An incompatible server may therefore pass doctor but fail runtime connection;
-the mandatory runtime health check remains necessary.
+Such a thread gets `AgentState.no_project = True` and `project` = Herdeck's own
+localized label ("No project" / "Bez projektu", `t3.no_project`). On the tile
+the thread title takes the project's (headline) place and the title/tab line
+shows the muted label instead of repeating the title. With `[view].tile_icon =
+"project"` or `"both"` the logo box shows Lucide's `message-square-dashed` in
+grey (what T3 shows for the bucket) instead of a monogram of the scratch path;
+a `[view.project_icons]` entry for the scratch path still wins. Done
+notifications use the same glyph, and the desktop agent card names the thread
+"No project" instead of showing the scratch path. Lucide `projectIcon` values
+of other projects are not rendered (they keep the favicon/monogram path).
 
-The branch exceeds the approximate 1,000-line review guideline because it
-includes transport, its shared action boundary, setup, tests and documentation
-for one feature. It remains together so a checkout is runnable; logical changes
-are separated into commits and reviewed individually. No repeated whole-branch
-review was requested or run.
+## Known limits
 
-Physical pilot is not complete: Ulanzi is present on macBench, with the installed
-Herdeck desktop and runtime active. The test T3 instance is on HEADLESS-A3112.
-The user has been asked whether T3 should run on macBench or HEADLESS-A3112;
-the existing macBench runtime has not been interrupted, replaced or reconfigured.
-Remote T3 networking is not silently introduced to bridge this choice.
+- A never-opened completed thread is not Done (same as T3).
+- Approval answers are offered only for live requests, and questions only when
+  there is one single-choice question. Everything else says "Answer in T3".
+- After an uncertain delivery the tile stays read-only until the thread
+  changes; the deck offers no buttons meanwhile, and only a client holding the
+  older revision (for example herdeck-ctl) can resend the same command.
+- The desktop agent card shows a T3 rejected, uncertain or skipped result as
+  a failure with the connector's message. The deck tiles and drill do not show
+  the message yet.
+- No raw terminal keys, streaming or desktop thread navigation.
+- Subagent lists are one level deep: a subagent's own subagents live in the
+  hidden child's detail, which Herdeck does not read. A parent that is not
+  active (settled, snoozed, archived) is not re-read, so its tile keeps the
+  last list it had.
 
-### Physical follow-up (2026-09-06)
+## What was removed, and why
 
-The real T3 0.0.38 server now supplies macBench alongside Herdr. The initial
-optimized USB writer left the physical deck showing an old page even though
-runtime health and HID packet byte counts looked successful. The user confirmed
-that the physical display worked after selecting the standard strmdck writer in
-a source runtime. This confirms display delivery only; physical approval, Stop,
-and question handling still need separate acceptance. See the compatibility and
-connection-lifecycle notes in `agent-setup.md`.
+- **V1 support** (T3 0.0.38 and older, protocol 1). The V1 shell has no true
+  per-thread status and no shared read state. A V1 server now shows as
+  incompatible.
+- **The local read-state bridge** (`t3_seen.py`, `t3_desktop_seen.py`, the
+  LevelDB reader of the T3 desktop UI state). The server's `lastVisitedAt`
+  replaces it for every client. `[[servers]] desktop_read_state` and
+  `HERDECK_T3_DESKTOP_READ_STATE` are still accepted, ignored, and logged once
+  as obsolete; the editor toggle is gone.
+- **Stop session** (V1 background-session control). Stop is `run.interrupt`.
 
-The follow-up tile correction uses T3's editable project name and thread title,
-updates both on subsequent snapshots, and labels backends `T3` / `HERDR` instead
-of abbreviating internal connection IDs. Focused tests cover snapshot renames,
-explicit secondary layouts, missing project-title fallback, and the standard
-writer override.
+## Topologies
 
-### Completion status
+- A T3 desktop app or server on the same Mac: setup discovers it from
+  `<base-dir>/userdata/server-runtime.json`.
+- A remote headless server through an SSH local forward:
+  `python -m herdeck.t3_setup --id t3-m4mini --issuer-ssh user@host --install-forward`
+  installs the LaunchAgent `com.herdeck.t3-forward.<id>` (`ssh -N -L
+  127.0.0.1:<free port from 13773>:127.0.0.1:<remote T3 port> user@host`),
+  issues the token on the T3 host over SSH, and records `issuer_ssh` on the
+  server entry (server URL `http://127.0.0.1:<port>`). Without
+  `--install-forward`, pass `--local-port` of an existing tunnel.
+- Renewal: `--renew-all --restart-label <label>` renews every T3 server due
+  within seven days (remote via `issuer_ssh`, local via the local CLI) and
+  restarts the runtime once; `--install-renew-agent` installs the hourly
+  `com.herdeck.t3-renew` job for it.
 
-T3 `session.status=ready` describes an inactive provider session, including after
-successful work. Herdeck displays `DONE` only when the latest turn explicitly has
-`state=completed` and a completion timestamp. Active work or pending requests take
-precedence; interrupted/error turns and newly opened threads do not become Done.
-T3 background work/monitoring also prevents a premature Done tile. Continue remains
-available after completion. The T3 client's per-device last-visited timestamp is not in the server snapshot.
-By default, Herdeck retains Done until acknowledged or superseded. MacBench now
-opts into the local desktop read-state bridge described in `agent-setup.md`: it
-reads a private copy of T3 desktop Local Storage and mirrors its visited boundary.
-The user verified Done-to-Idle by opening this thread on MacBench on 2026-09-07.
-Other devices are not synchronized, and no completion timeout is enabled.
+`herdeck-doctor` identifies environments by the descriptor's `environmentId`
+(fetched without a credential, 2 s timeout), not by URL, so a tunnel URL and
+the server's own origin count as the same server. It warns when the T3 server
+on this machine (from `~/.t3/userdata/server-runtime.json` `origin`, or the
+older `host` + `port`) answers but no configured server reaches its
+environment, and when two configured servers reach the same environment
+(every thread would get two tiles). It does not probe other hosts.
+
+See [agent-setup.md](agent-setup.md#dedicated-t3-transport-and-renewal-macos).

@@ -15,7 +15,7 @@ from collections.abc import Callable
 from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from .driver.base import COLORS, PanelView
-from .project_icons import ProjectIconStore, StoredIcon, default_store
+from .project_icons import NO_PROJECT_ICON, ProjectIconStore, StoredIcon, default_store
 
 log = logging.getLogger(__name__)
 
@@ -317,7 +317,9 @@ _font_cache: dict[tuple[int, bool], object] = {}  # (size, bold) -> font
 # 18: all text is drawn with the vendored Inter font (was Arial/Helvetica on
 #     macOS, DejaVu/Liberation on Linux).
 # 19: running subagents draw a fork badge + count in the bottom band.
-TILE_VERSION = 20
+# 20: the status panel redesign (one structured layout).
+# 21: a project-less T3 thread draws the bundled "no project" glyph.
+TILE_VERSION = 21
 # The status word / elapsed time column: right of the logo box incl. the comet
 # ring (x < 66), inside the 12px right margin.
 STATUS_MAX_W = ICON_SIZE - 12 - 70
@@ -581,6 +583,56 @@ def _monogram_image(name: str) -> Image.Image:
         **kw,
     )
     return _round_corners(img)
+
+
+# Lucide "message-square-dashed" (lucide-static 1.61.0, ISC licence — see
+# assets/ATTRIBUTION.md), the icon T3 shows for its project-less bucket. Its
+# path data on the 24-unit grid, transcribed as polylines (the small corner
+# arcs as points along them) and drawn with PIL: no SVG rasterizer, no baked
+# PNG, identical pixels everywhere. Each entry is one stroked sub-path.
+def _arc(cx: float, cy: float, r: float, start: float, end: float, steps: int = 8):
+    return [
+        (cx + r * math.cos(math.radians(start + (end - start) * i / steps)),
+         cy + r * math.sin(math.radians(start + (end - start) * i / steps)))
+        for i in range(steps + 1)
+    ]
+
+
+_NO_PROJECT_STROKES: tuple[list[tuple[float, float]], ...] = (
+    [(14, 3), (16, 3)],
+    [(16, 19), (14, 19)],
+    [(2, 12), (2, 10)],
+    # M2 16 v5.286 a.71.71 0 0 0 1.212.502 l1.149-1.149 (the speech tail)
+    [(2, 16), *_arc(2.71, 21.286, 0.71, 180, 45, 6), (4.361, 20.639)],
+    [*_arc(20, 17, 2, 90, 0), (22, 16)],
+    [(22, 10), (22, 12)],
+    [(22, 6), *_arc(20, 5, 2, 0, -90)],
+    [*_arc(4, 5, 2, -90, -180), (2, 6)],
+    [(8, 19), (10, 19)],
+    [(8, 3), (10, 3)],
+)
+# T3 tints the icon "gray"; a mid grey reads on the dark tile without
+# competing with the status colour (the contrast plate covers bright fills).
+NO_PROJECT_INK = (150, 154, 162)
+
+
+def no_project_image() -> Image.Image:
+    """The bundled mark of a project-less T3 thread: ICON_SIZE RGBA, grey
+    strokes on transparent, supersampled 4x for smooth curves and round caps."""
+    ss = 4
+    side = ICON_SIZE * ss
+    unit = side / 24
+    width = 2 * unit  # stroke-width="2"
+    img = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    ink = NO_PROJECT_INK + (255,)
+    r = width / 2
+    for stroke in _NO_PROJECT_STROKES:
+        pts = [(x * unit, y * unit) for x, y in stroke]
+        d.line(pts, fill=ink, width=round(width))
+        for x, y in pts:  # round caps and joins (stroke-linecap/-linejoin)
+            d.ellipse([x - r, y - r, x + r, y + r], fill=ink)
+    return img.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
 
 
 # Largest project icon decoded (per side, as a w*h pixel budget). Favicons are
@@ -1110,6 +1162,7 @@ class IconProvider:
             tile.branch,
             tile.status_text,
             tile.time_text,
+            getattr(tile, "wait_reason", ""),
             getattr(tile, "tile_fill", "none"),
         ]
         mode = getattr(tile, "tile_icon", "agent")
@@ -1290,7 +1343,9 @@ class IconProvider:
             return hit, True
         img: Image.Image | None = None
         cacheable = True
-        if icon_hash:
+        if icon_hash == NO_PROJECT_ICON:
+            img = no_project_image()
+        elif icon_hash:
             stored = self._project_icons.get(icon_hash)
             if stored is None:
                 cacheable = False

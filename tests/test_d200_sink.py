@@ -217,6 +217,27 @@ def test_spinner_disappearing_is_a_semantic_d200_change():
     assert driver.tile_views[1][0].time_text == "10s"
 
 
+def test_waiting_reason_change_is_a_semantic_d200_change():
+    class CapturingDriver(FrameDriver):
+        def __init__(self):
+            super().__init__()
+            self.tile_views = []
+
+        def render_frame(self, tiles, panel):
+            self.tile_views.append(tiles)
+
+    driver = CapturingDriver()
+    sink = _sink(driver, start_reader=False)
+    panel = PanelView("Agents")
+    for reason in ("CI", "SUB"):
+        tile = TileView(0, "api", "violet", time_text="5s", status_text="WAITING", wait_reason=reason)
+        sink.deliver(RenderFrame(_RS([tile], panel), working=None, full=True))
+
+    # The status word stays WAITING and the elapsed time is volatile, so the
+    # reason is the only change; it must reach the device at once.
+    assert driver.tile_views[1][0].wait_reason == "SUB"
+
+
 def test_reconnecting_sink_retries_initially_missing_device_and_paints_latest_frame():
     class ConnectedDriver(FrameDriver):
         def __init__(self):

@@ -253,11 +253,11 @@ def test_rendered_tiles_and_panels_match_goldens(tmp_path):
 # ("0") cannot move them.
 
 CLASSIC_TILE_NAMES = {
-    "agent_idle": "tile_587ad3e12b02974b.png",
-    "agent_spin": "tile_5ee478c92eafe439.png",
-    "agent_pulse": "tile_410679658949bb5d.png",
-    "label_back": "tile_385dda9a5f3cdbe7.png",
-    "empty": "tile_087110854e8265e7.png",
+    "agent_idle": "tile_3a0393c756bf115d.png",
+    "agent_spin": "tile_5c7bf4622f8e8609.png",
+    "agent_pulse": "tile_ea94e6dc06e6fc94.png",
+    "label_back": "tile_004b4b13a82856cc.png",
+    "empty": "tile_9fc63986125b309c.png",
 }
 
 
@@ -295,4 +295,4 @@ def test_classic_panel_cache_key_is_stable():
     panel = layout.panel_overview(layout.Counts(1, 3, 2, 1, waiting=1), 0, 2, set(), 8, None)
     digest = hashlib.sha1(repr(panel.cache_key()).encode()).hexdigest()[:12]
     assert digest == "d498fae3290e"
-    assert icons.TILE_VERSION == 20
+    assert icons.TILE_VERSION == 21

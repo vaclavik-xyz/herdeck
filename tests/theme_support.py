@@ -70,7 +70,7 @@ def make_ctx(provider, language: str = "en", colors: dict[str, str] | None = Non
 
 def agent(status, **kw) -> TileView:
     """An agent tile as layout.agent_tile_view builds it (plus A1's fields)."""
-    word = {"waiting": "CI", None: "PENDING"}.get(status, (status or "").upper())
+    word = {None: "PENDING"}.get(status, (status or "").upper())
     base = dict(
         agent_type="claude",
         repo="herdeck",
@@ -78,6 +78,7 @@ def agent(status, **kw) -> TileView:
         status_text=word,
         time_text="12m",
         status=status,
+        wait_reason="CI" if status == "waiting" else "",
         kind="agent",
         title="Fix the flaky render golden test",
         workspace="herdeck",
@@ -103,7 +104,7 @@ def agent_variants() -> dict[str, TileView]:
     )
     out["no_title_no_workspace"] = agent("idle", title="", workspace="")
     out["no_agent_type"] = agent(None, agent_type=None, repo="pending-thing")
-    out["waiting_long_label"] = agent("waiting", status_text="REVIEW +1", subagents=2)
+    out["waiting_long_label"] = agent("waiting", wait_reason="REVIEW +1", subagents=2)
     return out
 
 

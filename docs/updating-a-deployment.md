@@ -94,8 +94,9 @@ containing `TOKEN`, `SECRET` or `PASSWORD` are refused (tokens live in the
 keychain, a `[[servers]]` `token_file` or the bridge token file, never in a
 unit), as are variables the unit already sets. Prefer the config key where one exists:
 `HERDECK_D200_STANDARD_WRITER=1` is `[hardware].d200_standard_writer = true` in
-`local.toml`, and `HERDECK_T3_DESKTOP_READ_STATE=1` is `desktop_read_state =
-true` on the T3 `[[servers]]` entry. The env vars still work as a fallback.
+`local.toml`. The env var still works as a fallback. (`HERDECK_T3_DESKTOP_READ_STATE`
+and `desktop_read_state` are obsolete: T3 0.0.46+ keeps read state on the
+server; they are ignored.)
 
 **`--managed`** (bridge only) runs the bridge from its own virtualenv at
 `~/.local/share/herdeck/bridge-venv` instead of a checkout. The installer

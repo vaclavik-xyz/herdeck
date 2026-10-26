@@ -50,7 +50,7 @@ class QuietTheme(Theme):
         word = {
             "done": k.t(ctx, "status.done"),
             "offline": k.t(ctx, "status.offline"),
-            "waiting": (tile.status_text or "").strip() or k.t(ctx, "status.waiting"),
+            "waiting": k.holder_label(ctx, tile),
         }.get(status)
         fill = OFFLINE_INK if status == "offline" else ctx.readable(accent, (20, 22, 26))
         # beside the mark: two rows (the status word, then "+N"); a word too

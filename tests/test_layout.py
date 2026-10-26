@@ -438,6 +438,16 @@ def test_offline_panel_still_reports_blocked_agents():
     assert pv.lines == ["down-server · 2 waiting for you"]
 
 
+def test_partial_outage_note_names_the_down_server_by_its_label():
+    names = {"m4": "M4"}
+    one = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"m4"}, 1, None, servers=2, names=names)
+    assert one.note == "M4 offline"
+    unnamed = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"nep"}, 1, None, servers=2, names=names)
+    assert unnamed.note == "nep offline"
+    two = panel_overview(Counts(0, 1, 0, 0), 0, 1, {"m4", "nep"}, 1, None, servers=3, names=names)
+    assert two.note == "2 servers offline"
+
+
 def test_panel_overview_renders_czech_when_asked():
     pv = panel_overview(Counts(2, 1, 0, 0), 0, 1, set(), 3, ("api", "4m"), lang="cs")
     assert pv.title == "Čeká na tebe: 2"
@@ -472,17 +482,31 @@ def test_waiting_status_color_is_violet():
     assert status_color(Status.WAITING) == "violet"
 
 
-def test_waiting_tile_uses_holder_label():
-    from herdeck.layout import tile_status_text
+def test_waiting_tile_says_waiting_and_puts_the_holder_under_it():
+    from herdeck.layout import tile_status_text, tile_time_text, tile_wait_reason
 
     def held(waiting_on):
         return _labelled(Status.WAITING, {}, waiting_on=waiting_on)
 
-    assert tile_status_text(held("⏳ ci")) == "CI"
-    assert tile_status_text(held("⏳ review +1")) == "REVIEW +1"
-    assert tile_status_text(held("")) == "WAITING"  # fallback word
-    assert tile_status_text(held(""), lang="cs") == "V POZADÍ"
-    assert len(tile_status_text(held("⏳ a-very-long-marker-name"))) <= 12
+    assert tile_status_text(held("⏳ ci")) == "WAITING"
+    assert tile_status_text(held("⏳ ci"), lang="cs") == "V POZADÍ"
+    assert tile_time_text(held("⏳ ci"), "4m") == "CI · 4m"
+    assert tile_time_text(held("⏳ review +1"), "") == "REVIEW +1"
+    assert tile_time_text(held(""), "4m") == "4m"
+    assert len(tile_wait_reason(held("⏳ a-very-long-marker-name"))) <= 12
+
+
+def test_t3_waiting_reasons_are_shortened_for_the_time_line():
+    from herdeck.layout import tile_time_text
+
+    def t3(label):
+        return _labelled(Status.WAITING, {"waiting": label})
+
+    assert tile_time_text(t3("SUBAGENT"), "12m") == "SUB · 12m"
+    assert tile_time_text(t3("COMMAND"), "1h") == "CMD · 1h"
+    assert tile_time_text(t3("CI"), "4m") == "CI · 4m"
+    # a reason only belongs to a waiting tile
+    assert tile_time_text(_labelled(Status.WORKING, {"waiting": "CI"}), "4m") == "4m"
 
 
 def _labelled(status, state_labels, waiting_on=""):
@@ -515,8 +539,8 @@ def test_tile_status_text_falls_back_to_the_status_word():
     assert tile_status_text(_labelled(Status.IDLE, {}), lang="cs") == "NEČINNÝ"
 
 
-def test_tile_status_text_scrubs_variation_selector_off_vs16_emoji():
-    from herdeck.layout import tile_status_text
+def test_tile_wait_reason_scrubs_variation_selector_off_vs16_emoji():
+    from herdeck.layout import tile_wait_reason
 
     # A label spelled with the VS16 presentation selector ("⚠️" is U+26A0
     # WARNING SIGN + U+FE0F): the emoji's base is dropped by the font-glyph
@@ -524,38 +548,38 @@ def test_tile_status_text_scrubs_variation_selector_off_vs16_emoji():
     # keeps for scripts — so without special-casing it, the selector used to
     # survive and draw as a leading tofu box even with the base gone.
     agent = _labelled(Status.WAITING, {}, waiting_on="⚠️ ci")
-    label = tile_status_text(agent)
+    label = tile_wait_reason(agent)
     assert label == "CI"
     assert "️" not in label
 
 
-def test_tile_status_text_drops_enclosing_keycap_mark():
-    from herdeck.layout import tile_status_text
+def test_tile_wait_reason_drops_enclosing_keycap_mark():
+    from herdeck.layout import tile_wait_reason
 
     # A keycap off a phone keyboard ("1️⃣" = "1" + VS16 U+FE0F + the
     # enclosing mark U+20E3, category Me) exercises both halves of the fix at
     # once: dropping only the variation selector while leaving Me out of
     # _UNDRAWABLE would still draw the enclosing mark as a tofu box.
     agent = _labelled(Status.WAITING, {}, waiting_on="1️⃣ ci")
-    assert tile_status_text(agent) == "1 CI"
+    assert tile_wait_reason(agent) == "1 CI"
 
 
-def test_tile_status_text_keeps_combining_marks_needed_to_spell_a_word():
-    from herdeck.layout import tile_status_text
+def test_tile_wait_reason_keeps_combining_marks_needed_to_spell_a_word():
+    from herdeck.layout import tile_wait_reason
 
     # Thai "ไม่ว่าง" (busy) ends in Mn combining marks that carry the tone —
     # dropping them the way Me/variation selectors are dropped would truncate
     # the word to a form no Thai reader would recognize.
     agent = _labelled(Status.WAITING, {}, waiting_on="ไม่ว่าง")
-    assert tile_status_text(agent) == "ไม่ว่าง".upper()
+    assert tile_wait_reason(agent) == "ไม่ว่าง".upper()
 
 
-def test_tile_status_text_waiting_on_beats_state_label():
-    from herdeck.layout import tile_status_text
+def test_wait_reason_waiting_on_beats_state_label():
+    from herdeck.layout import tile_wait_reason
 
     agent = _labelled(Status.WAITING, {"waiting": "held"}, waiting_on="⏳ ci")
 
-    assert tile_status_text(agent) == "CI"
+    assert tile_wait_reason(agent) == "CI"
 
 
 def test_tile_status_text_offline_beats_state_label():
@@ -567,12 +591,12 @@ def test_tile_status_text_offline_beats_state_label():
 
 
 def test_tile_status_text_waiting_falls_through_to_the_state_label():
-    from herdeck.layout import tile_status_text
+    from herdeck.layout import tile_status_text, tile_wait_reason
 
     # A pane whose wire status is literally "waiting" with no holder label:
-    # herdr's own label still beats the generic word.
-    assert tile_status_text(_labelled(Status.WAITING, {"waiting": "held"})) == "HELD"
-    assert tile_status_text(_labelled(Status.WAITING, {})) == "WAITING"
+    # the word stays WAITING and the backend's own label becomes the reason.
+    assert tile_status_text(_labelled(Status.WAITING, {"waiting": "held"})) == "WAITING"
+    assert tile_wait_reason(_labelled(Status.WAITING, {"waiting": "held"})) == "HELD"
 
 
 def test_tile_status_text_flattens_a_multiline_state_label():

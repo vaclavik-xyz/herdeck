@@ -45,7 +45,9 @@ class HeadlineTheme(Theme):
         name_y = S - 18 - name_font.size
         d.text((14, name_y), name, font=name_font, fill=ink)
         word = ""
-        if status in ("blocked", "waiting", "offline"):
+        if status == "waiting":
+            word = k.holder_label(ctx, tile)
+        elif status in ("blocked", "offline"):
             word = (tile.status_text or "").strip() or k.t(ctx, f"status.{status}")
         subs = f"+{tile.subagents}" if tile.subagents else ""
         row_y = name_y - 32 - 10

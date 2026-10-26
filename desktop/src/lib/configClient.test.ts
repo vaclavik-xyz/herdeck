@@ -305,7 +305,29 @@ describe("secretFlag", () => {
   });
 });
 
-import { serversOf, addServer, removeServer, updateServer } from "./configClient";
+import { serversOf, addServer, removeServer, updateServer, serverLabel, serverLabelIssue } from "./configClient";
+
+describe("server label checks mirror the backend", () => {
+  const rec = (label?: string) => ({ id: "s", url: "ws://x", token_env: "T", ...(label === undefined ? {} : { label }) });
+
+  it("displays the trimmed label", () => {
+    expect(serverLabel(rec("  M4  "))).toBe("M4");
+    expect(serverLabel(rec())).toBe("");
+  });
+
+  it("counts characters after trimming, by code point", () => {
+    expect(serverLabelIssue([rec(" " + "x".repeat(16) + " ")], 0)).toBeNull();
+    expect(serverLabelIssue([rec("x".repeat(17))], 0)).toBe("too_long");
+    expect(serverLabelIssue([rec("😀".repeat(16))], 0)).toBeNull();
+  });
+
+  it("flags the later of two servers sharing a label, case-insensitively", () => {
+    const servers = [rec("M4"), rec(" m4 "), rec(), rec()];
+    expect(serverLabelIssue(servers, 0)).toBeNull();
+    expect(serverLabelIssue(servers, 1)).toBe("duplicate");
+    expect(serverLabelIssue(servers, 3)).toBeNull(); // unlabelled servers never clash
+  });
+});
 
 describe("server mutations", () => {
   it("preserves the T3 backend while editing and adding connections", () => {
@@ -319,6 +341,16 @@ describe("server mutations", () => {
     p.base.servers = [{ id: "t3", url: "http://127.0.0.1:3773", token_env: "T3", backend: "t3", desktop_read_state: true }];
     const next = updateServer(p, 0, "url", "http://127.0.0.1:3774");
     expect(serversOf(next)[0].desktop_read_state).toBe(true);
+  });
+  it("keeps a T3 server's issuer_ssh through edits and drops it when cleared", () => {
+    const p = parseConfig(rawConfig())!;
+    p.base.servers = [{ id: "t3", url: "http://127.0.0.1:13773", token_env: "T3", backend: "t3", issuer_ssh: "admin@m4" }];
+    const edited = updateServer(p, 0, "url", "http://127.0.0.1:13774");
+    expect(serversOf(edited)[0].issuer_ssh).toBe("admin@m4");
+    expect((edited.base.servers as Record<string, unknown>[])[0].issuer_ssh).toBe("admin@m4");
+    expect(serversOf(updateServer(edited, 0, "issuer_ssh", " admin@m5 "))[0].issuer_ssh).toBe("admin@m5");
+    const cleared = updateServer(edited, 0, "issuer_ssh", " ");
+    expect(cleared.base.servers).toEqual([{ id: "t3", url: "http://127.0.0.1:13774", token_env: "T3", backend: "t3" }]);
   });
   it("keeps a server's token_file through edits and drops it when cleared", () => {
     const p = parseConfig(rawConfig())!;
