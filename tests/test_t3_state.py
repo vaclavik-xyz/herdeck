@@ -68,7 +68,7 @@ CASES = [
     ({"status": "completed", "latestRunCompletedAt": iso(-600), "latestUserMessageAt": iso(-30)}, {}, W, "", "QUEUED"),
     ({"status": "completed", "latestRunCompletedAt": iso(-600), "latestUserMessageAt": iso(600)}, {}, ID, "", ""),
     ({"status": "running"}, {}, W, "", ""),
-    ({"status": "waiting"}, {}, Status.WAITING, "", "WAITING"),
+    ({"status": "waiting"}, {}, Status.WAITING, "", ""),
     ({"status": "completed", "pendingBackgroundTasks": [{"taskId": "a", "kind": "subagent"}]}, {},
      Status.WAITING, "", "SUBAGENT"),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "command"}]}, {}, Status.WAITING, "", "COMMAND"),
@@ -82,7 +82,7 @@ CASES = [
     ({"status": "completed", "pendingBackgroundTasks": [{"kind": "command"}, {"kind": "subagent"}]}, {},
      Status.WAITING, "", "SUBAGENT"),
     ({"status": "completed", "pendingBackgroundTasks": [{"kind": "future_kind"}]}, {},
-     Status.WAITING, "", "WAITING"),
+     Status.WAITING, "", ""),
     ({"status": "waiting", "pendingBackgroundTasks": [{"kind": "monitor"}]}, {}, Status.WAITING, "", "MONITOR"),
     ({"status": "completed", "pendingBackgroundTasks": [{"kind": "monitor"}],
       "latestRunCompletedAt": iso(-60), "lastVisitedAt": iso(-300)}, {}, D, "completion", ""),
@@ -160,7 +160,7 @@ def test_lifecycle_fields_follow_the_mapping():
 def test_shell_plan_fixture_is_waiting_like_t3_sidebar():
     sh, projects = fx_shell("plan")
     s = thread_state("srv", sh, fx_detail("plan"), projects, "e", features={}, now=NOW)
-    assert (s.status, s.attention, s.state_labels) == (Status.WAITING, "", {"waiting": "WAITING"})
+    assert (s.status, s.attention, s.state_labels) == (Status.WAITING, "", {})
 
 
 def test_fixture_states():

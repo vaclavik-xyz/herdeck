@@ -406,6 +406,7 @@ class ElgatoSession:
             repo=primary,
             branch=secondary,
             status_text=layout.tile_status_text(s, self.config.view.language, down),
+            time_text=layout.tile_time_text(s, ""),
             project_icons=self._project_icons,
         )
 

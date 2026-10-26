@@ -620,11 +620,33 @@ def _short_status_label(text: str) -> str:
     return " ".join(kept.split()).upper()[:12]
 
 
+# The reasons the T3 backend reports, cut to fit the tile's time line next to
+# the elapsed time ("SUB · 12m"); "SUBAGENT · 12m" does not fit.
+_WAIT_REASON_SHORT = {"SUBAGENT": "SUB", "COMMAND": "CMD", "MONITOR": "MON", "BACKGROUND": "BG"}
+
+
+def tile_wait_reason(agent: AgentState) -> str:
+    """Why a WAITING agent waits, short: herdeck's own `waiting_on` holder
+    label, else the backend's native waiting label (T3: CI, SUBAGENT, …)."""
+    if agent.status is not Status.WAITING:
+        return ""
+    reason = (_short_status_label(agent.waiting_on)
+              or _short_status_label(agent.state_labels.get(Status.WAITING.value, "")))
+    return _WAIT_REASON_SHORT.get(reason, reason)
+
+
+def tile_time_text(agent: AgentState, elapsed: str) -> str:
+    """The line under the status word: the waiting reason, then the elapsed
+    time ("CI · 4m"). The status word itself stays WAITING so a waiting agent
+    always reads as waiting, whatever holds it."""
+    return " · ".join(part for part in (tile_wait_reason(agent), elapsed) if part)
+
+
 def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) -> str:
     """The agent tile's status word, in strict precedence order: the server
-    being down, herdeck's own explicit `waiting_on` holder label, herdr's
-    native per-status label (0.8.2+, what herdr's sidebar shows), and finally
-    the generic translated status word.
+    being down, the generic word for WAITING (the reason goes on the line
+    below, see `tile_time_text`), herdr's native per-status label (0.8.2+,
+    what herdr's sidebar shows), and finally the generic translated word.
 
     Shared by every agent-tile path so the deck, the window and the Elgato
     surface can't drift apart on which label wins.
@@ -632,9 +654,7 @@ def tile_status_text(agent: AgentState, lang: str = "en", down: bool = False) ->
     if down:
         return tr(lang, "status.offline")
     if agent.status is Status.WAITING:
-        held = _short_status_label(agent.waiting_on)
-        if held:
-            return held
+        return tr(lang, "status.waiting")
     native = _short_status_label(agent.state_labels.get(agent.status.value, ""))
     if native:
         return native
@@ -660,8 +680,9 @@ def panel_detail(
     elif agent.status is Status.WORKING and agent.progress:
         headline = agent.progress
     status = tile_status_text(agent, lang)
+    time = tile_time_text(agent, elapsed)
     return PanelView(
-        title=f"{status} · {elapsed}" if elapsed else status,
+        title=f"{status} · {time}" if time else status,
         lines=lines,
         color=color or status_color(agent.status),
         headline=headline,
