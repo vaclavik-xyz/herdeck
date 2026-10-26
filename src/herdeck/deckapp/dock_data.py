@@ -13,6 +13,7 @@ import io
 import logging
 import re
 from collections.abc import Iterable, Mapping
+from pathlib import PurePosixPath
 
 from ..model import AgentKey, AgentState, Status
 from ..project_icons import ProjectIconStore, default_store
@@ -57,9 +58,13 @@ def _icon_name(agent: AgentState) -> str:
 
 
 def row_repo(agent: AgentState) -> str:
-    """The repo the dock shows and groups by. A project-less T3 thread's repo
-    is T3's scratch dir: show (and group under) its "No project" title."""
-    return agent.project if agent.no_project and agent.project else agent.repo
+    """The repo the dock shows and groups by. A T3 thread's repo is its
+    project's workspaceRoot path: show its T3 project name like the deck
+    tile does (layout.compose_line), else the path's last part. A
+    project-less thread's project is the "No project" label."""
+    if agent.backend == "t3":
+        return agent.project or PurePosixPath(agent.repo).name
+    return agent.repo
 
 
 def waiting_on(agent: AgentState) -> str:

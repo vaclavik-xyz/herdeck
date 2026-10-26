@@ -74,7 +74,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the herdr-only output tail and Open in herdr; an idle thread in the `+N`
   list is a plain row, not a herdr focus button. `/agent/list` rows carry
   `backend`, a T3 waiting label (CI, SUBAGENT) as `waiting_on`, and a
-  project-less thread's "No project" title as its repo.
+  thread's T3 project name (not its workspace path; "No project" for a
+  project-less thread) as its repo.
 
 ### Changed
 - `[desktop].floating` (`"dock"` default, `"deck"` = the hardware mirror)

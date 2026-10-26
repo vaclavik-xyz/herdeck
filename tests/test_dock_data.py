@@ -138,6 +138,13 @@ def test_rows_name_a_t3_thread_and_its_wait_reason():
     assert (rows[1]["backend"], rows[1]["waiting_on"]) == ("herdr", "REVIEW")  # holder label first
 
 
+def test_rows_name_a_t3_thread_by_its_project_not_its_workspace_path():
+    named = _agent("t1", repo="/Users/me/projects/herdeck", project="Herdeck", backend="t3")
+    unnamed = _agent("t2", repo="/Users/me/projects/shop", backend="t3")
+    rows = agent_rows([named, unnamed], since={}, connections={}, overrides={}, store=ProjectIconStore())
+    assert [(r["repo"], r["monogram"]) for r in rows] == [("Herdeck", "H"), ("shop", "S")]
+
+
 def test_rows_ignore_a_stale_waiting_label_off_waiting():
     agent = _agent("t1", Status.WORKING, backend="t3", state_labels={"waiting": "CI"})
     rows = agent_rows([agent], since={}, connections={}, overrides={}, store=ProjectIconStore())
