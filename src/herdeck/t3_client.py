@@ -10,6 +10,7 @@ import asyncio
 import ipaddress
 import itertools
 import json
+import zlib
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
@@ -47,6 +48,40 @@ class _TooLarge(T3Error):
     """A response over the caller's byte limit."""
 
 
+def _gunzip(data: bytes, limit: int) -> bytes:
+    """The gzip body ``data`` inflated to at most ``limit`` bytes (the limit
+    bounds the decoded size, not only the transfer)."""
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = inflater.decompress(data, limit + 1)
+    except zlib.error:
+        raise T3Error("Unsupported T3 response") from None
+    if len(out) > limit or inflater.unconsumed_tail:
+        raise _TooLarge("T3 response exceeds limit")
+    if not inflater.eof:
+        raise T3Error("T3 transport or response error")  # truncated body
+    return out
+
+
+def shell_options(descriptor) -> dict:
+    """Shell-read filters the server advertises, as ``T3Client.shell`` kwargs.
+
+    ``omit_idle_subagents`` (capability ``shellThreadFamilies``) drops idle
+    subagent children: Herdeck never gives them a tile (``published``) and
+    T3 keeps every child that can still need the user. ``omit_older_settled``
+    (``shellOlderSettled``) drops settled threads older than the newest 25
+    settled ones, as T3's own sidebar does. On a server with hundreds of
+    threads together they shrink the shell more than tenfold."""
+    caps = descriptor.get("capabilities") if isinstance(descriptor, dict) else None
+    caps = caps if isinstance(caps, dict) else {}
+    opts = {}
+    if caps.get("shellThreadFamilies") is True:
+        opts["omit_idle_subagents"] = True
+    if caps.get("shellOlderSettled") is True:
+        opts["omit_older_settled"] = True
+    return opts
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -71,7 +106,10 @@ class T3Http:
 
     def _raw(self, path, method, limit=_LIMIT):
         """(Content-Type, body) of a response of at most ``limit`` bytes."""
-        headers = {"x-t3-orchestration-protocol": str(PROTOCOL)}
+        # gzip: a busy server's shell is over 1 MB of JSON and is read every
+        # second, often over Wi-Fi + Tailscale + an SSH tunnel; compressed it
+        # is about a tenth of that (T3 answers gzip when asked).
+        headers = {"x-t3-orchestration-protocol": str(PROTOCOL), "Accept-Encoding": "gzip"}
         if self._token:  # the descriptor is public; never send an empty bearer
             headers["Authorization"] = "Bearer " + self._token
         req = Request(self.url + path, method=method, data=b"" if method == "POST" else None,
@@ -79,6 +117,7 @@ class T3Http:
         try:
             with self._opener.open(req, timeout=self._timeout) as response:
                 ctype = response.headers.get("Content-Type", "")
+                encoding = response.headers.get("Content-Encoding", "").strip().lower()
                 raw = response.read(limit + 1)
         except HTTPError as exc:
             raise T3Error(f"T3 HTTP {exc.code}", exc.code) from None
@@ -86,6 +125,10 @@ class T3Http:
             raise T3Error("T3 transport or response error") from None
         if len(raw) > limit:
             raise _TooLarge("T3 response exceeds limit")
+        if encoding == "gzip":
+            raw = _gunzip(raw, limit)
+        elif encoding not in ("", "identity"):
+            raise T3Error("Unsupported T3 response encoding")
         return ctype, raw
 
     def _request(self, path, method):
@@ -159,8 +202,14 @@ class T3Client:
     def descriptor(self) -> dict:
         return self.http.get("/.well-known/t3/environment")
 
-    def shell(self) -> dict:
-        shell = self.http.get("/api/orchestration/shell")
+    def shell(self, *, omit_idle_subagents=False, omit_older_settled=False) -> dict:
+        query = {}
+        if omit_idle_subagents:
+            query["omitIdleSubagents"] = "1"
+        if omit_older_settled:
+            query["omitOlderSettled"] = "1"
+        path = "/api/orchestration/shell" + ("?" + urlencode(query) if query else "")
+        shell = self.http.get(path)
         if any(not isinstance(shell.get(k), list) for k in ("threads", "archivedThreads", "projects")):
             raise T3Error("Unsupported T3 shell contract")
         return shell

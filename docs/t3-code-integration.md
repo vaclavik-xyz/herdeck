@@ -28,7 +28,7 @@ token (no DPoP needed).
 | Step | Endpoint | Notes |
 |---|---|---|
 | Descriptor | `GET /.well-known/t3/environment` (no auth) | `orchestrationProtocolVersion` must be exactly 2 (absent means 1); `capabilities` advertise `threadSettlement`, `threadSnooze`, `threadVisitedTracking`, `serverResolvedCommandContext` |
-| Shell | `GET /api/orchestration/shell` | `threads`, `archivedThreads`, `projects`; needs `orchestration:read` |
+| Shell | `GET /api/orchestration/shell` | `threads`, `archivedThreads`, `projects`; needs `orchestration:read`. Read with `Accept-Encoding: gzip` and, when the descriptor advertises `shellThreadFamilies` / `shellOlderSettled`, `?omitIdleSubagents=1` / `?omitOlderSettled=1` (the value must be `1`; `true` is ignored) |
 | Detail | `GET /api/orchestration/threads/:id/bounded` | prompt of a pending request, plan text, last assistant message; the unbounded `/threads/:id` is used only when the bounded plan text is left in a turn item |
 | Ticket | `POST /api/auth/websocket-ticket` | bearer, no body; the ticket lasted 5 minutes on the server we observed |
 | Dispatch | `ws(s)://host/ws?orchestrationProtocol=2&wsTicket=...` | one `orchestration.dispatchCommand` request, wait for the `Exit`, close; `Ping` is answered with `Pong` |
@@ -40,7 +40,14 @@ without `orchestrationProtocol=2` fails with HTTP 426; a dispatch result is
 `{sequence}`; replaying a `commandId` returns the same result without
 executing it again; a schema error comes back as `Die`, a refused command as
 `Fail` (`OrchestrationV2DispatchCommandError`); `thread.visit` sets the shared
-`lastVisitedAt`. HTTP errors: 401 invalid or expired credential, 403 missing
+`lastVisitedAt`. Shell size, measured 2026-11-19 on a server with 503 threads
+(403 of them subagent children): 1.6 MB plain, 134 kB gzip, 293 kB plain with
+both filters (40 threads), 35 kB both filters + gzip. Polled every second through an SSH tunnel over
+Wi-Fi, the unfiltered plain shell saturated the link and took every server
+offline. A server that was online goes offline only after
+`t3.OFFLINE_AFTER` (3) failed reads in a row that got no HTTP 4xx answer
+(transport errors, 5xx, an unreadable body); a 4xx (auth, protocol) or an
+incompatible descriptor still takes it offline at once. HTTP errors: 401 invalid or expired credential, 403 missing
 scope (`insufficient_scope` as observed), 404 unknown thread.
 
 Credential scopes: `orchestration:read` (tiles) and `orchestration:operate`
