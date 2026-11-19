@@ -1,7 +1,9 @@
 """T3 Code backend connector on orchestration protocol 2.
 
-Reads poll the HTTP shell every second and fetch a thread's bounded detail only
-when it changed; subagent children are listed on their parent's tile instead
+Reads poll the HTTP shell every second (gzip, filtered to the threads a deck can
+show when the server supports it) and fetch a thread's bounded detail only
+when it changed; a server counts as offline only after OFFLINE_AFTER failed
+reads in a row, so one slow answer on a congested link does not blank it; subagent children are listed on their parent's tile instead
 of getting one (``t3_state.published``). Actions are dispatched as V2 commands
 over the WebSocket RPC.
 The callback surface matches Herdeck's bridge connector (``on_snapshot``,
@@ -32,7 +34,7 @@ from .i18n import tr
 from .project_icon_discovery import icon_hash
 from .protocol import ProjectIcon
 from .t3_actions import Incompatible, build_commands, capabilities, negotiate, thread_actions
-from .t3_client import T3Client, T3Error, T3Http, T3Rejected
+from .t3_client import T3Client, T3Error, T3Http, T3Rejected, shell_options
 from .t3_state import active_plan, lifecycle, published, thread_state
 
 # T3Error/T3Http are re-exported for settings.py.
@@ -57,6 +59,11 @@ _DELIVERY_MEMORY = 256
 _ICON_RECHECK_S = 1800.0
 _ICON_RETRY_S = 600.0
 _read_state_warned = False
+# Consecutive failed transport reads before a server that was online is shown
+# offline: a single read that times out (8 s) on a congested link is noise,
+# three in a row (~30 s at worst) is an outage. Auth, protocol and contract
+# errors still take it offline at once.
+OFFLINE_AFTER = 3
 # The descriptor label is a display name the deck may show as a tile tag.
 _LABEL_MAX = 32
 
@@ -131,6 +138,7 @@ class T3Connector:
         self._cache = {}  # tid -> (detail cache key, detail)
         self._epoch = uuid.uuid4().hex
         self._features = None
+        self._shell_opts = {}  # shell_options() of the negotiated descriptor
         self._uncertain = {}  # tid -> revision whose delivery outcome is unknown
         self._deliveries = {}  # delivery key -> commands with their commandIds
         self._operate_denied = False
@@ -201,8 +209,9 @@ class T3Connector:
                 self.last_connect_error = str(exc)
                 raise _IncompatibleServer(str(exc)) from None
             self._features = features
+            self._shell_opts = shell_options(descriptor)
             self.server_label = descriptor_label(descriptor)
-        shell = await asyncio.to_thread(self.client.shell)
+        shell = await asyncio.to_thread(self.client.shell, **self._shell_opts)
         projects = {p["id"]: p for p in shell["projects"]
                     if isinstance(p, dict) and isinstance(p.get("id"), str)}
         self._projects = projects
@@ -309,20 +318,44 @@ class T3Connector:
 
     async def run(self):
         online = False
+        failures = 0  # consecutive failed reads
+        offline_at = None  # monotonic time the server went offline
         while not self._stop:
             try:
                 async with self._lock:
                     await self.refresh()
                 self.last_connect_error = None
+                if not online:
+                    if offline_at is not None:
+                        log.info("T3 server %r back online after %.0fs",
+                                 self.server.id, time.monotonic() - offline_at)
+                    else:
+                        log.info("T3 server %r online", self.server.id)
+                elif failures:
+                    log.info("T3 server %r recovered after %d failed read(s)", self.server.id, failures)
+                failures, offline_at = 0, None
                 self._set_connected(True)
                 online = True
                 self._report_label()
                 await self._sync_icons()
             except (T3Error, *_MALFORMED) as exc:
-                if getattr(exc, "code", None) is not None:
+                code = getattr(exc, "code", None)
+                if code is not None:
                     self._ever_connected = True  # an HTTP answer, not a dead transport
+                failures += 1
+                transient = (isinstance(exc, T3Error) and not isinstance(exc, _IncompatibleServer)
+                             and (code is None or code >= 500))
+                if online and transient and failures < OFFLINE_AFTER:
+                    # Keep the tiles and the negotiated state; the next read decides.
+                    log.debug("T3 server %r read failed (%d/%d): %s",
+                              self.server.id, failures, OFFLINE_AFTER, exc)
+                    await asyncio.sleep(self._interval)
+                    continue
                 self.last_connect_error = _connect_error(exc)
                 if online:
+                    log.warning("T3 server %r offline after %d failed read(s): %s",
+                                self.server.id, failures, self.last_connect_error)
+                    offline_at = time.monotonic()
                     self._epoch = uuid.uuid4().hex
                     self._features = None
                     self._cache.clear()

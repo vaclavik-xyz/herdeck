@@ -52,13 +52,15 @@ class FakeClient:
         self.outcomes = []
         self.shell_error = None
         self.shell_script = []  # per-call errors (None = success), then shell_error
+        self.shell_kwargs = []
         self.detail_errors = {}
 
     def descriptor(self):
         self.descriptor_calls += 1
         return copy.deepcopy(self.desc)
 
-    def shell(self):
+    def shell(self, **kwargs):
+        self.shell_kwargs.append(kwargs)
         error = self.shell_script.pop(0) if self.shell_script else self.shell_error
         if error:
             raise error
@@ -169,13 +171,67 @@ async def test_shell_errors_take_the_server_offline_with_plain_messages(code, me
 @pytest.mark.asyncio
 async def test_descriptor_is_negotiated_once_per_connection_and_again_after_a_drop():
     client = FakeClient(thread("completed"))
-    client.shell_script = [None, None, T3Error("down"), None]
+    client.shell_script = [None, None, *[T3Error("down")] * t3mod.OFFLINE_AFTER, None]
     h = Harness(client)
     epoch = h.c._epoch
     await h.run_rounds(4)
     assert [up for _, up in h.connections][:4] == [True, True, False, True]
     assert client.descriptor_calls == 2
     assert h.c._epoch != epoch and h.c.health()["ever_connected"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_short_transport_blip_keeps_the_server_online_and_its_state():
+    client = FakeClient(thread("completed"))
+    client.shell_script = [None, *[T3Error("timeout")] * (t3mod.OFFLINE_AFTER - 1), None]
+    h = Harness(client)
+    epoch = h.c._epoch
+    await h.run_rounds(2)
+    assert [up for _, up in h.connections][:2] == [True, True]
+    assert client.descriptor_calls == 1 and h.c._epoch == epoch
+    assert len(client.shell_kwargs) == t3mod.OFFLINE_AFTER + 1
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_blip_is_transient_too():
+    client = FakeClient(thread("completed"))
+    client.shell_script = [None, T3Error("T3 HTTP 502", 502), None]
+    h = Harness(client)
+    await h.run_rounds(2)
+    assert [up for _, up in h.connections][:2] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_an_auth_error_takes_an_online_server_offline_at_once():
+    client = FakeClient(thread("completed"))
+    client.shell_script = [None, T3Error("T3 HTTP 401", 401)]
+    client.shell_error = None
+    h = Harness(client)
+    await h.run_rounds(2)
+    assert [up for _, up in h.connections][:2] == [True, False]
+    assert len(client.shell_kwargs) == 2
+
+
+@pytest.mark.asyncio
+async def test_going_offline_and_back_is_logged(caplog):
+    client = FakeClient(thread("completed"))
+    client.shell_script = [None, *[T3Error("down")] * t3mod.OFFLINE_AFTER, None]
+    h = Harness(client)
+    with caplog.at_level("INFO", logger="herdeck.t3"):
+        await h.run_rounds(3)
+    text = caplog.text
+    assert "T3 server 't3' online" in text
+    assert f"T3 server 't3' offline after {t3mod.OFFLINE_AFTER} failed read(s)" in text
+    assert "T3 server 't3' back online after" in text
+
+
+@pytest.mark.asyncio
+async def test_the_shell_is_read_with_the_filters_the_server_advertises():
+    client = FakeClient(thread("completed"))
+    client.desc.setdefault("capabilities", {}).update(shellThreadFamilies=True, shellOlderSettled=True)
+    h = Harness(client)
+    await h.run_rounds()
+    assert client.shell_kwargs == [{"omit_idle_subagents": True, "omit_older_settled": True}]
 
 
 @pytest.mark.asyncio
@@ -994,7 +1050,7 @@ def test_descriptor_label_tolerates_a_non_dict_descriptor():
 async def test_the_connector_reports_the_descriptor_label_once_per_change():
     client = FakeClient(thread("completed"))
     client.desc["label"] = " Jupiter-M4mini\x1b "
-    client.shell_script = [None, None, T3Error("down"), None]
+    client.shell_script = [None, None, *[T3Error("down")] * t3mod.OFFLINE_AFTER, None]
     labels = []
     h = Harness(client, on_server_label=lambda sid, label: labels.append((sid, label)))
     await h.run_rounds(4)
