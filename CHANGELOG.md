@@ -89,6 +89,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Mini dock: a project group expanded near the bottom of the screen no longer
   runs the strip off the work area; the strip is drawn lifted just enough and
   returns to its place when the group folds.
+
+## [0.18.1] - 2026-11-19
+
+### Fixed
 - T3 servers no longer drop offline together on a busy link. The connector
   read the whole uncompressed shell every second (1.6 MB on a server with 500
   threads), which saturated a Wi-Fi + Tailscale + SSH-tunnel path and timed out
