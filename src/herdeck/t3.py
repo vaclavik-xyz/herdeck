@@ -61,8 +61,9 @@ _ICON_RETRY_S = 600.0
 _read_state_warned = False
 # Consecutive failed transport reads before a server that was online is shown
 # offline: a single read that times out (8 s) on a congested link is noise,
-# three in a row (~30 s at worst) is an outage. Auth, protocol and contract
-# errors still take it offline at once.
+# three in a row (~30 s at worst) is an outage. Only reads without an HTTP 4xx
+# answer count (transport, 5xx, unreadable body); a 4xx (auth, protocol), an
+# incompatible descriptor or a mapping error takes it offline at once.
 OFFLINE_AFTER = 3
 # The descriptor label is a display name the deck may show as a tile tag.
 _LABEL_MAX = 32

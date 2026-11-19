@@ -45,8 +45,9 @@ executing it again; a schema error comes back as `Die`, a refused command as
 both filters (40 threads), 35 kB both filters + gzip. Polled every second through an SSH tunnel over
 Wi-Fi, the unfiltered plain shell saturated the link and took every server
 offline. A server that was online goes offline only after
-`t3.OFFLINE_AFTER` (3) failed transport/5xx reads in a row; auth, protocol and
-contract errors still take it offline at once. HTTP errors: 401 invalid or expired credential, 403 missing
+`t3.OFFLINE_AFTER` (3) failed reads in a row that got no HTTP 4xx answer
+(transport errors, 5xx, an unreadable body); a 4xx (auth, protocol) or an
+incompatible descriptor still takes it offline at once. HTTP errors: 401 invalid or expired credential, 403 missing
 scope (`insufficient_scope` as observed), 404 unknown thread.
 
 Credential scopes: `orchestration:read` (tiles) and `orchestration:operate`
