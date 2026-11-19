@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -6,7 +7,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 import websockets
 
-from herdeck.t3_client import T3Client, T3Error, T3Http, T3Rejected
+from herdeck import t3_client
+from herdeck.t3_client import T3Client, T3Error, T3Http, T3Rejected, shell_options
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -18,10 +20,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _answer(self):
         _Handler.seen.append((self.command, self.path, {k.lower(): v for k, v in self.headers.items()}))
-        status, body, *ctype = _Handler.routes.get((self.command, self.path), (404, {"code": "not_found"}))
+        status, body, *rest = _Handler.routes.get((self.command, self.path), (404, {"code": "not_found"}))
         raw = body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else b""
         self.send_response(status)
-        self.send_header("Content-Type", ctype[0] if ctype else "application/json")
+        self.send_header("Content-Type", rest[0] if rest else "application/json")
+        for name, value in (rest[1] if len(rest) > 1 else {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -49,6 +53,59 @@ def test_reads_send_bearer_and_protocol_header(http_server):
     _, _, headers = _Handler.seen[-1]
     assert headers["authorization"] == "Bearer tok"
     assert headers["x-t3-orchestration-protocol"] == "2"
+
+
+def test_reads_ask_for_gzip_and_inflate_it(http_server):
+    _, url = http_server
+    _Handler.routes[("GET", "/api/orchestration/shell")] = (
+        200, gzip.compress(json.dumps(SHELL).encode()), "application/json", {"Content-Encoding": "gzip"})
+    assert T3Client(url, "tok").shell() == SHELL
+    _, _, headers = _Handler.seen[-1]
+    assert headers["accept-encoding"] == "gzip"
+
+
+def test_the_size_limit_bounds_the_inflated_body(http_server, monkeypatch):
+    _, url = http_server
+    monkeypatch.setattr(t3_client, "_LIMIT", 1000)
+    bomb = gzip.compress(b"[" + b" " * 50_000 + b"]")
+    assert len(bomb) < 1000
+    _Handler.routes[("GET", "/api/orchestration/shell")] = (200, bomb, "application/json",
+                                                            {"Content-Encoding": "gzip"})
+    with pytest.raises(T3Error, match="exceeds limit"):
+        T3Http(url, "tok")._raw("/api/orchestration/shell", "GET", 1000)
+
+
+@pytest.mark.parametrize("body,encoding", [(b"not gzip", "gzip"),
+                                           (gzip.compress(b"{}")[:-6], "gzip"),
+                                           (b"{}", "br")])
+def test_a_broken_or_unknown_encoding_is_a_sanitized_error(http_server, body, encoding):
+    _, url = http_server
+    _Handler.routes[("GET", "/api/orchestration/shell")] = (200, body, "application/json",
+                                                            {"Content-Encoding": encoding})
+    with pytest.raises(T3Error) as err:
+        T3Client(url, "tok").shell()
+    assert err.value.code is None
+
+
+def test_shell_filters_go_in_the_query(http_server):
+    _, url = http_server
+    path = "/api/orchestration/shell?omitIdleSubagents=1&omitOlderSettled=1"
+    _Handler.routes[("GET", path)] = (200, SHELL)
+    T3Client(url, "tok").shell(omit_idle_subagents=True, omit_older_settled=True)
+    assert _Handler.seen[-1][1] == path
+
+
+@pytest.mark.parametrize("descriptor,expected", [
+    ({"capabilities": {"shellThreadFamilies": True, "shellOlderSettled": True}},
+     {"omit_idle_subagents": True, "omit_older_settled": True}),
+    ({"capabilities": {"shellOlderSettled": True}}, {"omit_older_settled": True}),
+    ({"capabilities": {"shellThreadFamilies": "yes"}}, {}),
+    ({"capabilities": []}, {}),
+    ({}, {}),
+    (None, {}),
+])
+def test_shell_options_follow_the_advertised_capabilities(descriptor, expected):
+    assert shell_options(descriptor) == expected
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 500])

@@ -89,6 +89,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Mini dock: a project group expanded near the bottom of the screen no longer
   runs the strip off the work area; the strip is drawn lifted just enough and
   returns to its place when the group folds.
+- T3 servers no longer drop offline together on a busy link. The connector
+  read the whole uncompressed shell every second (1.6 MB on a server with 500
+  threads), which saturated a Wi-Fi + Tailscale + SSH-tunnel path and timed out
+  every server on it, herdr bridges included. Shell reads now ask for gzip and
+  leave out idle subagent children and older settled threads when the server
+  advertises `shellThreadFamilies` / `shellOlderSettled` (1.6 MB → 35 kB).
+  An online server goes offline only after 3 failed reads in a row, and the
+  runtime log records each offline/online transition.
 
 ## [0.18.0] - 2026-10-26
 
